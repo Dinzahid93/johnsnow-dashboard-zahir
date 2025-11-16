@@ -1,12 +1,10 @@
 import os
 import pathlib
-import numpy as np
-import pandas as pd
 import geopandas as gpd
+import pandas as pd
 import streamlit as st
-from streamlit_folium import st_folium
 import folium
-import rasterio
+from streamlit_folium import st_folium
 
 # ============================================================
 # PATHS
@@ -29,6 +27,7 @@ def load_vectors():
     deaths = gpd.read_file(deaths_path)
     pumps   = gpd.read_file(pumps_path)
 
+    # Identify deaths column
     if "deaths" in deaths.columns:
         death_col = "deaths"
     elif "Count" in deaths.columns:
@@ -39,6 +38,12 @@ def load_vectors():
 
     deaths[death_col] = pd.to_numeric(deaths[death_col], errors="coerce").fillna(0).astype(int)
 
+    # Convert to WGS84 if needed
+    if deaths.crs and deaths.crs.to_epsg() != 4326:
+        deaths = deaths.to_crs(4326)
+    if pumps.crs and pumps.crs.to_epsg() != 4326:
+        pumps = pumps.to_crs(4326)
+
     return deaths, pumps, death_col
 
 loaded = load_vectors()
@@ -48,48 +53,10 @@ if loaded is None:
 deaths, pumps, death_col = loaded
 
 # ============================================================
-# LOAD TIFF (only if uploaded)
-# ============================================================
-def load_uploaded_tiff(uploaded_file):
-    """Load TIFF file from upload."""
-    if uploaded_file is None:
-        return None, None
-
-    try:
-        with rasterio.open(uploaded_file) as src:
-            arr = src.read()
-            h, w = src.height, src.width
-
-        # Make RGB
-        if arr.shape[0] == 1:
-            g = arr[0]
-            rgb = np.stack([g, g, g], axis=2)
-        else:
-            rgb = np.transpose(arr[:3], (1, 2, 0))
-
-        rgb = (255 * (rgb - rgb.min()) / (rgb.max() - rgb.min())).astype("uint8")
-
-        bounds = [[0, 0], [h, w]]  # Pixel coordinates (Simple CRS)
-
-        return rgb, bounds
-
-    except Exception as e:
-        st.error(f"TIFF read error: {e}")
-        return None, None
-
-# ============================================================
-# STREAMLIT UI
+# STREAMLIT PAGE
 # ============================================================
 st.set_page_config(page_title="John Snow Dashboard", layout="wide")
-st.title("John Snow Cholera Map (TIFF optional upload)")
-
-# --- Upload box for TIFF ---
-uploaded_tiff = st.sidebar.file_uploader(
-    "Optional: Upload SnowMap.tif",
-    type=["tif", "tiff"]
-)
-
-snow_img, snow_bounds = load_uploaded_tiff(uploaded_tiff)
+st.title("John Snow Cholera Map – Clean Version (No TIFF)")
 
 # ============================================================
 # SUMMARY METRICS
@@ -103,62 +70,52 @@ c4.metric("Avg Deaths", f"{deaths[death_col].mean():.1f}")
 st.markdown("---")
 
 # ============================================================
-# BUILD MAP
+# INTERACTIVE MAP
 # ============================================================
 st.subheader("Interactive Map")
 
-# Default center (from deaths layer)
+# Compute center
 center_lat = deaths.geometry.y.mean()
 center_lon = deaths.geometry.x.mean()
 
-m = folium.Map(
-    location=[center_lat, center_lon],
-    zoom_start=17,
-    tiles="CartoDB Positron"
-)
+m = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="CartoDB Positron")
 
-# --- If uploaded TIFF exists → use Simple CRS ---
-if snow_img is not None and snow_bounds is not None:
-    m = folium.Map(location=[snow_bounds[1][0]/2, snow_bounds[1][1]/2],
-                   zoom_start=1, crs="Simple")
-
-    folium.raster_layers.ImageOverlay(
-        snow_img,
-        bounds=snow_bounds,
-        opacity=0.8,
-        name="SnowMap"
-    ).add_to(m)
-
-# --- Death markers ---
-deaths_fg = folium.FeatureGroup("Deaths")
+# Layer: deaths
+fg_deaths = folium.FeatureGroup("Deaths")
 for _, row in deaths.iterrows():
-    x = row.geometry.x
-    y = row.geometry.y
+    lat = row.geometry.y
+    lon = row.geometry.x
     d = row[death_col]
+
     folium.CircleMarker(
-        [y, x],
+        location=[lat, lon],
         radius=4 + d * 0.3,
         color="red",
         fill=True,
-        fill_opacity=0.9,
+        fill_opacity=0.85,
         popup=f"Deaths: {d}"
-    ).add_to(deaths_fg)
-deaths_fg.add_to(m)
+    ).add_to(fg_deaths)
 
-# --- Pump markers ---
-pumps_fg = folium.FeatureGroup("Pumps")
+fg_deaths.add_to(m)
+
+# Layer: pumps
+fg_pumps = folium.FeatureGroup("Pumps")
 for _, row in pumps.iterrows():
-    x = row.geometry.x
-    y = row.geometry.y
+    lat = row.geometry.y
+    lon = row.geometry.x
+
     folium.Marker(
-        [y, x],
+        [lat, lon],
         icon=folium.Icon(color="blue", icon="tint"),
         popup="Water Pump"
-    ).add_to(pumps_fg)
-pumps_fg.add_to(m)
+    ).add_to(fg_pumps)
 
+fg_pumps.add_to(m)
+
+# Add layer control
 folium.LayerControl().add_to(m)
 
+# Display map
 st_folium(m, width=1000, height=600)
 
 # ============================================================
