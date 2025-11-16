@@ -123,7 +123,7 @@ deaths = add_nearest_pump_analysis(deaths, pumps)
 # STREAMLIT PAGE
 # ============================================================
 st.set_page_config(page_title="John Snow Dashboard", layout="wide")
-st.title("John Snow Cholera Map – Heatmap Enabled 🔥")
+st.title("John Snow Cholera Map - Dashboard")
 
 # ============================================================
 # SIDEBAR TOGGLES
@@ -248,3 +248,4 @@ st.dataframe(deaths.drop(columns="geometry"))
 
 st.subheader("Pumps Table")
 st.dataframe(pumps.drop(columns="geometry"))
+
