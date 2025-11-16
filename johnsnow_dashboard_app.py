@@ -19,7 +19,7 @@ except:
 
 DATA_DIR = BASE_DIR / "data"
 
-# Look for SnowMap.tif or SnowMap.tiff
+# SnowMap TIFF — detect existence
 snowmap_path = None
 for name in ["SnowMap.tif", "SnowMap.tiff"]:
     if (DATA_DIR / name).exists():
@@ -29,7 +29,7 @@ for name in ["SnowMap.tif", "SnowMap.tiff"]:
 deaths_path = DATA_DIR / "deaths_by_bldg.geojson"
 pumps_path  = DATA_DIR / "pumps.geojson"
 
-# Raster lib
+# raster library
 try:
     import rasterio
     from rasterio.warp import transform_bounds
@@ -47,24 +47,25 @@ def load_vector():
     deaths = gpd.read_file(deaths_path)
     pumps = gpd.read_file(pumps_path)
 
+    # detect death column
     if "deaths" in deaths.columns:
-        dc = "deaths"
+        death_col = "deaths"
     elif "Count" in deaths.columns:
-        dc = "Count"
+        death_col = "Count"
     else:
-        st.error("No deaths column found.")
+        st.error("No deaths column found!")
         return None
 
-    deaths[dc] = pd.to_numeric(deaths[dc], errors="coerce").fillna(0).astype(int)
+    deaths[death_col] = pd.to_numeric(deaths[death_col], errors="coerce").fillna(0).astype(int)
 
     deaths_wgs = deaths.to_crs(epsg=4326)
     pumps_wgs  = pumps.to_crs(epsg=4326)
 
-    return deaths, pumps, deaths_wgs, pumps_wgs, dc
+    return deaths, pumps, deaths_wgs, pumps_wgs, death_col
 
 
 # ============================================================
-# TIFF LOADER (NO CACHE)
+# LOAD SNOWMAP TIFF — NO CACHE
 # ============================================================
 
 def load_snowmap(deaths_wgs):
@@ -78,25 +79,26 @@ def load_snowmap(deaths_wgs):
             tif_crs = src.crs
             b = src.bounds
     except Exception as e:
-        st.sidebar.error(f"TIFF load error: {e}")
+        st.error(f"TIFF load error: {e}")
         return None, None
 
-    # If TIFF has no CRS, auto-fit based on point extent
+    # If TIFF has NO CRS, auto-fit to data bounds
     if tif_crs is None:
         minx, miny, maxx, maxy = deaths_wgs.total_bounds
-        pad_x = (maxx - minx) * 0.05
-        pad_y = (maxy - miny) * 0.05
-        bounds = [[miny - pad_y, minx - pad_x], [maxy + pad_y, maxx + pad_x]]
+        px = 0.05 * (maxx - minx)
+        py = 0.05 * (maxy - miny)
+        bounds = [[miny - py, minx - px], [maxy + py, maxx + px]]
     else:
         try:
-            wb = transform_bounds(tif_crs, "EPSG:4326",
-                                  b.left, b.bottom, b.right, b.top)
+            wb = transform_bounds(
+                tif_crs, "EPSG:4326",
+                b.left, b.bottom, b.right, b.top
+            )
             bounds = [[wb[1], wb[0]], [wb[3], wb[2]]]
         except:
-            st.warning("TIFF CRS transform failed. Using raw extent.")
             bounds = [[b.bottom, b.left], [b.top, b.right]]
 
-    # RGB conversion
+    # Convert to RGB
     if arr.shape[0] == 1:
         g = arr[0]
         rgb = np.stack([g, g, g], axis=0)
@@ -123,25 +125,24 @@ snow_img, snow_bounds = load_snowmap(deaths_wgs)
 
 
 # ============================================================
-# UI LAYOUT — PROFESSIONAL & CLEAN
+# UI LAYOUT
 # ============================================================
 
 st.set_page_config(page_title="John Snow Dashboard", layout="wide")
-
-st.title("John Snow Cholera Outbreak (1854) – GIS Dashboard")
+st.title("John Snow 1854 Cholera – GIS Dashboard")
 
 
 # TOP METRICS
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Deaths", int(deaths[death_col].sum()))
 c2.metric("Buildings", len(deaths))
-c3.metric("Max Deaths in a Building", int(deaths[death_col].max()))
+c3.metric("Max Deaths per Building", int(deaths[death_col].max()))
 c4.metric("Average Deaths", f"{deaths[death_col].mean():.2f}")
 
 st.markdown("---")
 
 
-# MAP SETTINGS (professional expander)
+# MAP SETTINGS EXPANDER
 with st.expander("🗺️ Map Settings"):
     basemap_choice = st.selectbox(
         "Basemap Style",
@@ -149,12 +150,11 @@ with st.expander("🗺️ Map Settings"):
     )
 
     opacity = st.slider("SnowMap Opacity", 0.0, 1.0, 0.75, 0.05)
-
     scaler = st.slider("Death Marker Scale", 0.2, 1.5, 0.4, 0.1)
 
 
 # ============================================================
-# MAP
+# BUILD MAP
 # ============================================================
 
 st.subheader("Interactive Map")
@@ -162,8 +162,11 @@ st.subheader("Interactive Map")
 center_lat = deaths_wgs.geometry.y.mean()
 center_lon = deaths_wgs.geometry.x.mean()
 
-m = folium.Map(location=[center_lat, center_lon], zoom_start=17,
-               tiles=basemap_choice)
+m = folium.Map(
+    location=[center_lat, center_lon],
+    zoom_start=17,
+    tiles=basemap_choice
+)
 
 # SnowMap overlay
 if snow_img is not None:
@@ -175,7 +178,7 @@ if snow_img is not None:
         show=True
     ).add_to(m)
 
-# Deaths layer
+# Death layer
 fg_death = folium.FeatureGroup("Deaths")
 for _, row in deaths_wgs.iterrows():
     d = int(row[death_col])
@@ -189,7 +192,7 @@ for _, row in deaths_wgs.iterrows():
     ).add_to(fg_death)
 fg_death.add_to(m)
 
-# Pump layer
+# Pumps
 fg_pump = folium.FeatureGroup("Pumps")
 for _, row in pumps_wgs.iterrows():
     info = "<b>Water Pump</b><br>" + "<br>".join(
@@ -204,14 +207,22 @@ fg_pump.add_to(m)
 
 folium.LayerControl().add_to(m)
 
-st_folium(m, width=1100, height=650)
+# 🟢 FIX: No rerun when moving the map
+st_folium(
+    m,
+    width=1100,
+    height=650,
+    key="mainmap",
+    returned_objects=[]  # prevents rerun on pan/zoom
+)
 
 
 # ============================================================
-# ATTRIBUTE TABLES
+# TABLES
 # ============================================================
 
 st.markdown("---")
+
 st.subheader("Building Attributes")
 st.dataframe(deaths_wgs.drop(columns="geometry"))
 
