@@ -7,6 +7,7 @@ import folium
 import streamlit as st
 from streamlit_folium import st_folium
 
+
 # ============================================================
 # SAFE PATH HANDLING
 # ============================================================
@@ -18,17 +19,17 @@ except:
 
 DATA_DIR = BASE_DIR / "data"
 
-# Find SnowMap TIFF
+# Look for SnowMap.tif or SnowMap.tiff
 snowmap_path = None
-for fn in ["SnowMap.tif", "SnowMap.tiff"]:
-    if (DATA_DIR / fn).exists():
-        snowmap_path = DATA_DIR / fn
+for name in ["SnowMap.tif", "SnowMap.tiff"]:
+    if (DATA_DIR / name).exists():
+        snowmap_path = DATA_DIR / name
         break
 
 deaths_path = DATA_DIR / "deaths_by_bldg.geojson"
 pumps_path  = DATA_DIR / "pumps.geojson"
 
-# Raster import
+# Raster lib
 try:
     import rasterio
     from rasterio.warp import transform_bounds
@@ -41,16 +42,11 @@ except:
 # LOAD VECTOR DATA
 # ============================================================
 
-@st.cache_data(show_spinner=False)
-def load_vector_data():
-    try:
-        deaths = gpd.read_file(deaths_path)
-        pumps  = gpd.read_file(pumps_path)
-    except Exception as e:
-        st.error(f"Vector data error: {e}")
-        return None
+@st.cache_data
+def load_vector():
+    deaths = gpd.read_file(deaths_path)
+    pumps = gpd.read_file(pumps_path)
 
-    # detect column
     if "deaths" in deaths.columns:
         dc = "deaths"
     elif "Count" in deaths.columns:
@@ -61,18 +57,18 @@ def load_vector_data():
 
     deaths[dc] = pd.to_numeric(deaths[dc], errors="coerce").fillna(0).astype(int)
 
-    # reproject
-    deaths_wgs = deaths.to_crs(epsg=4326) if deaths.crs else deaths
-    pumps_wgs  = pumps.to_crs(epsg=4326) if pumps.crs else pumps
+    deaths_wgs = deaths.to_crs(epsg=4326)
+    pumps_wgs  = pumps.to_crs(epsg=4326)
 
     return deaths, pumps, deaths_wgs, pumps_wgs, dc
 
 
 # ============================================================
-# LOAD SNOWMAP TIFF (NO CACHE)
+# TIFF LOADER (NO CACHE)
 # ============================================================
 
 def load_snowmap(deaths_wgs):
+
     if not (RASTER_OK and snowmap_path):
         return None, None
 
@@ -85,27 +81,22 @@ def load_snowmap(deaths_wgs):
         st.sidebar.error(f"TIFF load error: {e}")
         return None, None
 
-    # No CRS → auto-fit to data bounds
+    # If TIFF has no CRS, auto-fit based on point extent
     if tif_crs is None:
         minx, miny, maxx, maxy = deaths_wgs.total_bounds
         pad_x = (maxx - minx) * 0.05
         pad_y = (maxy - miny) * 0.05
-        bounds = [
-            [miny - pad_y, minx - pad_x], 
-            [maxy + pad_y, maxx + pad_x]
-        ]
+        bounds = [[miny - pad_y, minx - pad_x], [maxy + pad_y, maxx + pad_x]]
     else:
         try:
-            wb = transform_bounds(
-                tif_crs, "EPSG:4326",
-                b.left, b.bottom, b.right, b.top
-            )
+            wb = transform_bounds(tif_crs, "EPSG:4326",
+                                  b.left, b.bottom, b.right, b.top)
             bounds = [[wb[1], wb[0]], [wb[3], wb[2]]]
         except:
-            st.sidebar.error("CRS transform failed.")
-            return None, None
+            st.warning("TIFF CRS transform failed. Using raw extent.")
+            bounds = [[b.bottom, b.left], [b.top, b.right]]
 
-    # Convert bands to RGB
+    # RGB conversion
     if arr.shape[0] == 1:
         g = arr[0]
         rgb = np.stack([g, g, g], axis=0)
@@ -120,10 +111,10 @@ def load_snowmap(deaths_wgs):
 
 
 # ============================================================
-# LOAD ALL DATA
+# LOAD DATA
 # ============================================================
 
-loaded = load_vector_data()
+loaded = load_vector()
 if loaded is None:
     st.stop()
 
@@ -132,13 +123,15 @@ snow_img, snow_bounds = load_snowmap(deaths_wgs)
 
 
 # ============================================================
-# UI HEADER
+# UI LAYOUT — PROFESSIONAL & CLEAN
 # ============================================================
 
 st.set_page_config(page_title="John Snow Dashboard", layout="wide")
-st.title("John Snow 1854 Cholera – Interactive Dashboard")
 
-# Summary
+st.title("John Snow Cholera Outbreak (1854) – GIS Dashboard")
+
+
+# TOP METRICS
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Deaths", int(deaths[death_col].sum()))
 c2.metric("Buildings", len(deaths))
@@ -148,32 +141,16 @@ c4.metric("Average Deaths", f"{deaths[death_col].mean():.2f}")
 st.markdown("---")
 
 
-# ============================================================
-# SIDEBAR FILTERS
-# ============================================================
+# MAP SETTINGS (professional expander)
+with st.expander("🗺️ Map Settings"):
+    basemap_choice = st.selectbox(
+        "Basemap Style",
+        ["cartodbpositron", "OpenStreetMap", "Stamen Toner"]
+    )
 
-st.sidebar.header("Filters")
+    opacity = st.slider("SnowMap Opacity", 0.0, 1.0, 0.75, 0.05)
 
-mind = int(deaths[death_col].min())
-maxd = int(deaths[death_col].max())
-
-mode = st.sidebar.radio("Filter by:", ["Range", "Exact"])
-
-if mode == "Range":
-    dmin, dmax = st.sidebar.slider("Deaths range", mind, maxd, (mind, maxd))
-    filtered = deaths_wgs[
-        (deaths_wgs[death_col] >= dmin) &
-        (deaths_wgs[death_col] <= dmax)
-    ]
-else:
-    dv = st.sidebar.slider("Deaths =", mind, maxd, mind)
-    filtered = deaths_wgs[deaths_wgs[death_col] == dv]
-
-# Basemap toggle
-if snow_img is not None:
-    show_snow = st.sidebar.checkbox("Show SnowMap Basemap", True)
-else:
-    st.sidebar.info("SnowMap basemap unavailable.")
+    scaler = st.slider("Death Marker Scale", 0.2, 1.5, 0.4, 0.1)
 
 
 # ============================================================
@@ -186,25 +163,25 @@ center_lat = deaths_wgs.geometry.y.mean()
 center_lon = deaths_wgs.geometry.x.mean()
 
 m = folium.Map(location=[center_lat, center_lon], zoom_start=17,
-               tiles="CartoDB Positron")
+               tiles=basemap_choice)
 
-# TIFF overlay
-if snow_img is not None and snow_bounds is not None:
+# SnowMap overlay
+if snow_img is not None:
     folium.raster_layers.ImageOverlay(
         snow_img,
         snow_bounds,
         name="SnowMap",
-        opacity=0.75,
-        show=show_snow
+        opacity=opacity,
+        show=True
     ).add_to(m)
 
-# Deaths
+# Deaths layer
 fg_death = folium.FeatureGroup("Deaths")
-for _, row in filtered.iterrows():
+for _, row in deaths_wgs.iterrows():
     d = int(row[death_col])
     folium.CircleMarker(
         [row.geometry.y, row.geometry.x],
-        radius=3 + 0.4 * d,
+        radius=3 + d * scaler,
         color="red",
         fill=True,
         fill_opacity=0.7,
@@ -212,7 +189,7 @@ for _, row in filtered.iterrows():
     ).add_to(fg_death)
 fg_death.add_to(m)
 
-# Pumps
+# Pump layer
 fg_pump = folium.FeatureGroup("Pumps")
 for _, row in pumps_wgs.iterrows():
     info = "<b>Water Pump</b><br>" + "<br>".join(
@@ -227,15 +204,16 @@ fg_pump.add_to(m)
 
 folium.LayerControl().add_to(m)
 
-st_folium(m, width=900, height=600)
+st_folium(m, width=1100, height=650)
 
 
 # ============================================================
 # ATTRIBUTE TABLES
 # ============================================================
 
-st.subheader("Filtered Buildings – Attributes")
-st.dataframe(filtered.drop(columns="geometry"))
+st.markdown("---")
+st.subheader("Building Attributes")
+st.dataframe(deaths_wgs.drop(columns="geometry"))
 
-st.subheader("Water Pumps – Attributes")
+st.subheader("Pump Attributes")
 st.dataframe(pumps_wgs.drop(columns="geometry"))
