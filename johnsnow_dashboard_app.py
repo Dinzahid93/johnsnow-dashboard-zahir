@@ -4,6 +4,7 @@ import geopandas as gpd
 import pandas as pd
 import streamlit as st
 import folium
+from shapely.ops import nearest_points
 from streamlit_folium import st_folium
 
 # ============================================================
@@ -55,6 +56,45 @@ if loaded is None:
 deaths, pumps, death_col = loaded
 
 # ============================================================
+# COMPUTE NEAREST PUMP DISTANCE  (NEW FEATURE)
+# ============================================================
+
+def add_nearest_pump_analysis(deaths, pumps):
+    # Convert to projected CRS for true distances
+    deaths_proj = deaths.to_crs(3857)
+    pumps_proj  = pumps.to_crs(3857)
+
+    pump_geoms = pumps_proj.geometry
+
+    nearest_ids = []
+    nearest_dist = []
+
+    for idx, row in deaths_proj.iterrows():
+        point = row.geometry
+        nearest_geom = nearest_points(point, pump_geoms.unary_union)[1]
+
+        # Get pump ID
+        pump_row = pumps_proj[pumps_proj.geometry == nearest_geom]
+        if len(pump_row) > 0:
+            pump_id = pump_row.iloc[0].get("ID", "N/A")
+        else:
+            pump_id = "N/A"
+
+        distance = point.distance(nearest_geom)
+
+        nearest_ids.append(pump_id)
+        nearest_dist.append(distance)
+
+    # Add back to original deaths layer
+    deaths["nearest_pump_id"] = nearest_ids
+    deaths["distance_to_pump_m"] = nearest_dist
+
+    return deaths
+
+# Apply analysis
+deaths = add_nearest_pump_analysis(deaths, pumps)
+
+# ============================================================
 # STREAMLIT PAGE
 # ============================================================
 st.set_page_config(page_title="John Snow Dashboard", layout="wide")
@@ -66,8 +106,8 @@ st.title("John Snow Cholera Map")
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Deaths", int(deaths[death_col].sum()))
 c2.metric("Buildings", len(deaths))
-c3.metric("Max Deaths", int(deaths[death_col].max()))
-c4.metric("Avg Deaths", f"{deaths[death_col].mean():.1f}")
+c3.metric("Max Deaths at a Building", int(deaths[death_col].max()))
+c4.metric("Avg Distance to Pump (m)", f"{deaths['distance_to_pump_m'].mean():.1f}")
 
 st.markdown("---")
 
@@ -86,29 +126,30 @@ m = folium.Map(
 )
 
 # ============================================================
-# DEATH MARKERS (ID + PumpID)
+# DEATH MARKERS (ID + nearest pump + distance)
 # ============================================================
 fg_deaths = folium.FeatureGroup("Deaths")
 
 for _, row in deaths.iterrows():
     lat = row.geometry.y
     lon = row.geometry.x
+    d = row[death_col]
 
-    # Extract fields safely
     death_id  = row.get("ID", "N/A")
-    pump_id   = row.get("PumpID", row.get("pumpID", "N/A"))
-    deaths_n  = row[death_col]
+    nearest_p = row.get("nearest_pump_id", "N/A")
+    dist_m    = row.get("distance_to_pump_m", 0)
 
     popup_html = f"""
     <b>Death Record</b><br>
     ID: {death_id}<br>
-    PumpID: {pump_id}<br>
-    Deaths: {deaths_n}<br>
+    Deaths: {d}<br>
+    Nearest Pump: {nearest_p}<br>
+    Distance: {dist_m:.1f} m<br>
     """
 
     folium.CircleMarker(
         [lat, lon],
-        radius=4 + deaths_n * 0.3,
+        radius=4 + d * 0.3,
         color="red",
         fill=True,
         fill_opacity=0.85,
@@ -118,7 +159,7 @@ for _, row in deaths.iterrows():
 fg_deaths.add_to(m)
 
 # ============================================================
-# PUMP MARKERS (ID + Name)
+# PUMP MARKERS
 # ============================================================
 fg_pumps = folium.FeatureGroup("Pumps")
 
@@ -127,7 +168,7 @@ for _, row in pumps.iterrows():
     lon = row.geometry.x
 
     pump_id = row.get("ID", "N/A")
-    pump_name = row.get("name", row.get("Name", row.get("PUMP", "Unknown")))
+    pump_name = row.get("name", row.get("Name", "Unknown"))
 
     popup_html = f"""
     <b>Water Pump</b><br>
@@ -143,17 +184,16 @@ for _, row in pumps.iterrows():
 
 fg_pumps.add_to(m)
 
-# Add layer control
+# Layer control
 folium.LayerControl().add_to(m)
 
-# Show map
 st_folium(m, width=1000, height=600)
 
 # ============================================================
 # ATTRIBUTE TABLES
 # ============================================================
 st.markdown("---")
-st.subheader("Deaths Table")
+st.subheader("Deaths Table (With Nearest Pump Analysis)")
 st.dataframe(deaths.drop(columns="geometry"))
 
 st.subheader("Pumps Table")
