@@ -6,7 +6,42 @@ import streamlit as st
 import folium
 from shapely.ops import nearest_points
 from streamlit_folium import st_folium
-from folium.plugins import HeatMap   # NEW
+from folium.plugins import HeatMap
+
+# ============================================================
+# ADD HEATMAP LEGEND FUNCTION
+# ============================================================
+def add_heatmap_legend(m):
+    legend_html = """
+    <div style="
+        position: fixed;
+        bottom: 30px;
+        left: 30px;
+        z-index: 9999;
+        background: white;
+        padding: 10px;
+        border-radius: 6px;
+        font-size: 14px;
+        box-shadow: 0 0 8px rgba(0,0,0,0.3);
+        ">
+        <b>Heatmap Intensity</b><br>
+        <div style="width: 140px; height: 14px;
+            background: linear-gradient(to right,
+                rgba(0,0,255,0.9),
+                rgba(0,255,255,0.9),
+                rgba(0,255,0,0.9),
+                rgba(255,255,0,0.9),
+                rgba(255,0,0,0.9)
+            );
+            margin-top:5px;
+            border:1px solid #999;">
+        </div>
+        <div style="font-size:11px;">
+            Low&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;High
+        </div>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
 
 # ============================================================
 # PATHS
@@ -27,20 +62,20 @@ pumps_path  = DATA_DIR / "pumps.geojson"
 @st.cache_data
 def load_vectors():
     deaths = gpd.read_file(deaths_path)
-    pumps   = gpd.read_file(pumps_path)
+    pumps  = gpd.read_file(pumps_path)
 
+    # Identify deaths field
     if "deaths" in deaths.columns:
         death_col = "deaths"
     elif "Count" in deaths.columns:
         death_col = "Count"
     else:
-        st.error("No deaths column found.")
+        st.error("No deaths field found.")
         return None
 
-    deaths[death_col] = pd.to_numeric(
-        deaths[death_col], errors="coerce"
-    ).fillna(0).astype(int)
+    deaths[death_col] = pd.to_numeric(deaths[death_col], errors="coerce").fillna(0).astype(int)
 
+    # CRS to WGS84
     if deaths.crs and deaths.crs.to_epsg() != 4326:
         deaths = deaths.to_crs(4326)
     if pumps.crs and pumps.crs.to_epsg() != 4326:
@@ -62,16 +97,16 @@ def add_nearest_pump_analysis(deaths, pumps):
     pumps_proj  = pumps.to_crs(3857)
 
     pump_geoms = pumps_proj.geometry
-
     nearest_ids = []
     nearest_dist = []
 
-    for idx, row in deaths_proj.iterrows():
+    for _, row in deaths_proj.iterrows():
         point = row.geometry
         nearest_geom = nearest_points(point, pump_geoms.unary_union)[1]
-        pump_row = pumps_proj[pumps_proj.geometry == nearest_geom]
 
-        pump_id = pump_row.iloc[0].get("ID", "N/A") if len(pump_row) else "N/A"
+        pump_row = pumps_proj[pumps_proj.geometry == nearest_geom]
+        pump_id = pump_row.iloc[0].get("ID", "N/A") if not pump_row.empty else "N/A"
+
         distance = point.distance(nearest_geom)
 
         nearest_ids.append(pump_id)
@@ -88,10 +123,10 @@ deaths = add_nearest_pump_analysis(deaths, pumps)
 # STREAMLIT PAGE
 # ============================================================
 st.set_page_config(page_title="John Snow Dashboard", layout="wide")
-st.title("John Snow Cholera Map – Now with Heatmap 🔥")
+st.title("John Snow Cholera Map – Heatmap Enabled 🔥")
 
 # ============================================================
-# SIDEBAR CONTROLS
+# SIDEBAR TOGGLES
 # ============================================================
 st.sidebar.header("Map Layers")
 show_heatmap = st.sidebar.checkbox("Show Heatmap of Deaths", value=True)
@@ -102,7 +137,7 @@ show_heatmap = st.sidebar.checkbox("Show Heatmap of Deaths", value=True)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Deaths", int(deaths[death_col].sum()))
 c2.metric("Buildings", len(deaths))
-c3.metric("Max Deaths at a Building", int(deaths[death_col].max()))
+c3.metric("Max Deaths", int(deaths[death_col].max()))
 c4.metric("Avg Distance to Pump (m)", f"{deaths['distance_to_pump_m'].mean():.1f}")
 
 st.markdown("---")
@@ -122,7 +157,7 @@ m = folium.Map(
 )
 
 # ============================================================
-# HEATMAP LAYER 🔥 (TOGGLE)
+# HEATMAP (IF ENABLED)
 # ============================================================
 if show_heatmap:
     heat_data = [
@@ -135,8 +170,10 @@ if show_heatmap:
         name="Death Heatmap",
         radius=25,
         blur=15,
-        max_zoom=17
+        max_zoom=17,
     ).add_to(m)
+
+    add_heatmap_legend(m)   # <— ADD LEGEND WHEN VISIBLE
 
 # ============================================================
 # DEATH MARKERS
@@ -199,14 +236,15 @@ fg_pumps.add_to(m)
 
 folium.LayerControl().add_to(m)
 
+# Show map
 st_folium(m, width=1000, height=600)
 
 # ============================================================
-# ATTRIBUTE TABLES
+# TABLES
 # ============================================================
 st.markdown("---")
-st.subheader("Deaths Table (With Nearest Pump & Distance)")
+st.subheader("Deaths Table (Nearest Pump + Distance)")
 st.dataframe(deaths.drop(columns="geometry"))
 
-st.subheader("Pump Table")
+st.subheader("Pumps Table")
 st.dataframe(pumps.drop(columns="geometry"))
