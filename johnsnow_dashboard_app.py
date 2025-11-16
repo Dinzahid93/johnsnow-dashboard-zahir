@@ -6,6 +6,7 @@ import streamlit as st
 import folium
 from shapely.ops import nearest_points
 from streamlit_folium import st_folium
+from folium.plugins import HeatMap   # NEW
 
 # ============================================================
 # PATHS
@@ -28,7 +29,6 @@ def load_vectors():
     deaths = gpd.read_file(deaths_path)
     pumps   = gpd.read_file(pumps_path)
 
-    # Identify deaths column
     if "deaths" in deaths.columns:
         death_col = "deaths"
     elif "Count" in deaths.columns:
@@ -41,7 +41,6 @@ def load_vectors():
         deaths[death_col], errors="coerce"
     ).fillna(0).astype(int)
 
-    # Convert CRS → WGS84
     if deaths.crs and deaths.crs.to_epsg() != 4326:
         deaths = deaths.to_crs(4326)
     if pumps.crs and pumps.crs.to_epsg() != 4326:
@@ -56,11 +55,9 @@ if loaded is None:
 deaths, pumps, death_col = loaded
 
 # ============================================================
-# COMPUTE NEAREST PUMP DISTANCE  (NEW FEATURE)
+# NEAREST PUMP ANALYSIS
 # ============================================================
-
 def add_nearest_pump_analysis(deaths, pumps):
-    # Convert to projected CRS for true distances
     deaths_proj = deaths.to_crs(3857)
     pumps_proj  = pumps.to_crs(3857)
 
@@ -72,33 +69,32 @@ def add_nearest_pump_analysis(deaths, pumps):
     for idx, row in deaths_proj.iterrows():
         point = row.geometry
         nearest_geom = nearest_points(point, pump_geoms.unary_union)[1]
-
-        # Get pump ID
         pump_row = pumps_proj[pumps_proj.geometry == nearest_geom]
-        if len(pump_row) > 0:
-            pump_id = pump_row.iloc[0].get("ID", "N/A")
-        else:
-            pump_id = "N/A"
 
+        pump_id = pump_row.iloc[0].get("ID", "N/A") if len(pump_row) else "N/A"
         distance = point.distance(nearest_geom)
 
         nearest_ids.append(pump_id)
         nearest_dist.append(distance)
 
-    # Add back to original deaths layer
     deaths["nearest_pump_id"] = nearest_ids
     deaths["distance_to_pump_m"] = nearest_dist
 
     return deaths
 
-# Apply analysis
 deaths = add_nearest_pump_analysis(deaths, pumps)
 
 # ============================================================
 # STREAMLIT PAGE
 # ============================================================
 st.set_page_config(page_title="John Snow Dashboard", layout="wide")
-st.title("John Snow Cholera Map")
+st.title("John Snow Cholera Map – Now with Heatmap 🔥")
+
+# ============================================================
+# SIDEBAR CONTROLS
+# ============================================================
+st.sidebar.header("Map Layers")
+show_heatmap = st.sidebar.checkbox("Show Heatmap of Deaths", value=True)
 
 # ============================================================
 # SUMMARY METRICS
@@ -126,7 +122,24 @@ m = folium.Map(
 )
 
 # ============================================================
-# DEATH MARKERS (ID + nearest pump + distance)
+# HEATMAP LAYER 🔥 (TOGGLE)
+# ============================================================
+if show_heatmap:
+    heat_data = [
+        [row.geometry.y, row.geometry.x, row[death_col]]
+        for _, row in deaths.iterrows()
+    ]
+
+    HeatMap(
+        heat_data,
+        name="Death Heatmap",
+        radius=25,
+        blur=15,
+        max_zoom=17
+    ).add_to(m)
+
+# ============================================================
+# DEATH MARKERS
 # ============================================================
 fg_deaths = folium.FeatureGroup("Deaths")
 
@@ -184,7 +197,6 @@ for _, row in pumps.iterrows():
 
 fg_pumps.add_to(m)
 
-# Layer control
 folium.LayerControl().add_to(m)
 
 st_folium(m, width=1000, height=600)
@@ -193,8 +205,8 @@ st_folium(m, width=1000, height=600)
 # ATTRIBUTE TABLES
 # ============================================================
 st.markdown("---")
-st.subheader("Deaths Table (With Nearest Pump Analysis)")
+st.subheader("Deaths Table (With Nearest Pump & Distance)")
 st.dataframe(deaths.drop(columns="geometry"))
 
-st.subheader("Pumps Table")
+st.subheader("Pump Table")
 st.dataframe(pumps.drop(columns="geometry"))
