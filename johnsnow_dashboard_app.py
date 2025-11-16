@@ -9,7 +9,7 @@ from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 
 # ============================================================
-# ADD HEATMAP LEGEND FUNCTION
+# HEATMAP LEGEND
 # ============================================================
 def add_heatmap_legend(m):
     legend_html = """
@@ -126,10 +126,11 @@ st.set_page_config(page_title="John Snow Dashboard", layout="wide")
 st.title("John Snow Cholera Map - Dashboard")
 
 # ============================================================
-# SIDEBAR TOGGLES
+# SIDEBAR
 # ============================================================
 st.sidebar.header("Map Layers")
 show_heatmap = st.sidebar.checkbox("Show Heatmap of Deaths", value=True)
+show_spider = st.sidebar.checkbox("Show Spider Lines (Death → Nearest Pump)", value=False)
 
 # ============================================================
 # SUMMARY METRICS
@@ -157,7 +158,7 @@ m = folium.Map(
 )
 
 # ============================================================
-# HEATMAP (IF ENABLED)
+# HEATMAP
 # ============================================================
 if show_heatmap:
     heat_data = [
@@ -173,7 +174,7 @@ if show_heatmap:
         max_zoom=17,
     ).add_to(m)
 
-    add_heatmap_legend(m)   # <— ADD LEGEND WHEN VISIBLE
+    add_heatmap_legend(m)
 
 # ============================================================
 # DEATH MARKERS
@@ -234,9 +235,38 @@ for _, row in pumps.iterrows():
 
 fg_pumps.add_to(m)
 
-folium.LayerControl().add_to(m)
+# ============================================================
+# SPIDER LINES (Death → Nearest Pump)
+# ============================================================
+if show_spider:
+    fg_spider = folium.FeatureGroup("Spider Lines")
 
-# Show map
+    pump_lookup = {
+        str(row.get("ID", row.get("id", ""))): (row.geometry.y, row.geometry.x)
+        for _, row in pumps.iterrows()
+    }
+
+    for _, row in deaths.iterrows():
+        death_lat = row.geometry.y
+        death_lon = row.geometry.x
+        nearest_id = str(row.get("nearest_pump_id", ""))
+
+        if nearest_id in pump_lookup:
+            pump_lat, pump_lon = pump_lookup[nearest_id]
+
+            folium.PolyLine(
+                locations=[(death_lat, death_lon), (pump_lat, pump_lon)],
+                color="black",
+                weight=1.5,
+                opacity=0.8
+            ).add_to(fg_spider)
+
+    fg_spider.add_to(m)
+
+# ============================================================
+# LAYER CONTROL + RENDER MAP
+# ============================================================
+folium.LayerControl().add_to(m)
 st_folium(m, width=1000, height=600)
 
 # ============================================================
