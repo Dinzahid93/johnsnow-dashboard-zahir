@@ -1,6 +1,6 @@
-streamlit
 geopandas
 folium
+streamlit
 streamlit-folium
-pandas
 numpy
+rasterio
