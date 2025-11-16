@@ -5,155 +5,120 @@ import folium
 from folium.plugins import HeatMap
 from streamlit_folium import st_folium
 
-# ------------------------------------------------------------
-# PAGE SETTINGS
-# ------------------------------------------------------------
-st.set_page_config(page_title="Cholera Heatmap & KDE Dashboard", layout="wide")
-st.title("🗺️ John Snow — Cholera Heatmap + KDE Density Dashboard")
+st.set_page_config(page_title="Cholera Heatmap + KDE", layout="wide")
+st.title("🗺 John Snow Cholera Dashboard")
 
-st.markdown("""
-Upload your **deaths** and **pumps** CSV files to visualize:
-- Heatmap (weighted)
-- KDE smooth density surface
-- Death points
-- Pump locations
+# ----------------------------------------------------------
+# Load your data automatically (NO upload required)
+# ----------------------------------------------------------
+deaths = pd.read_csv("data/deaths_by_bldg.csv")
+pumps = pd.read_csv("data/pumps.csv")
 
-All layers are toggle-able.
-""")
+# Rename X/Y → lon/lat for folium
+deaths = deaths.rename(columns={"X": "lon", "Y": "lat"})
+pumps = pumps.rename(columns={"X": "lon", "Y": "lat"})
 
-# ------------------------------------------------------------
-# FILE UPLOADS
-# ------------------------------------------------------------
-death_file = st.sidebar.file_uploader("Upload Deaths CSV", type=["csv"])
-pump_file = st.sidebar.file_uploader("Upload Pumps CSV", type=["csv"])
+# ----------------------------------------------------------
+# SIDEBAR CONTROLS
+# ----------------------------------------------------------
+show_deaths = st.sidebar.checkbox("Show Death Points", True)
+show_pumps = st.sidebar.checkbox("Show Pumps", True)
+show_heatmap = st.sidebar.checkbox("Show Death Heatmap", True)
 
-if death_file is None or pump_file is None:
-    st.warning("📌 Please upload **both files** to continue.")
-    st.stop()
+show_kde = st.sidebar.checkbox("Enable KDE (Advanced)", False)
 
-# ------------------------------------------------------------
-# LOAD CSV DATA
-# ------------------------------------------------------------
-deaths = pd.read_csv(death_file)
-pumps = pd.read_csv(pump_file)
+if show_kde:
+    bandwidth = st.sidebar.slider("KDE Bandwidth", 5, 80, 25)
+    grid_res = st.sidebar.slider("KDE Grid Resolution", 50, 200, 120)
 
-# Ensure column names
-for df in [deaths, pumps]:
-    df.rename(columns={"X": "lon", "Y": "lat"}, inplace=True, errors="ignore")
-
-# ------------------------------------------------------------
-# KDE SIDEBAR SETTINGS
-# ------------------------------------------------------------
-st.sidebar.header("KDE Settings")
-
-show_heatmap = st.sidebar.checkbox("Show Heatmap", value=True)
-show_kde = st.sidebar.checkbox("Show KDE Surface", value=False)
-show_deaths = st.sidebar.checkbox("Show Death Points", value=True)
-show_pumps = st.sidebar.checkbox("Show Pumps", value=True)
-
-bandwidth = st.sidebar.slider("KDE Bandwidth", 5, 80, 25)
-grid_res = st.sidebar.slider("KDE Grid Resolution", 50, 200, 120)
-
-# ------------------------------------------------------------
-# BASE MAP
-# ------------------------------------------------------------
+# ----------------------------------------------------------
+# Base Map
+# ----------------------------------------------------------
 center_lat = deaths["lat"].mean()
 center_lon = deaths["lon"].mean()
 
 m = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="cartodbpositron")
 
-heat_layer = folium.FeatureGroup(name="Heatmap", show=show_heatmap)
-kde_layer = folium.FeatureGroup(name="KDE Surface", show=show_kde)
-death_layer = folium.FeatureGroup(name="Deaths", show=show_deaths)
-pump_layer = folium.FeatureGroup(name="Pumps", show=show_pumps)
+layer_heat = folium.FeatureGroup("Heatmap", show=show_heatmap)
+layer_kde = folium.FeatureGroup("KDE Surface", show=show_kde)
+layer_deaths = folium.FeatureGroup("Deaths", show=show_deaths)
+layer_pumps = folium.FeatureGroup("Pumps", show=show_pumps)
 
-# ------------------------------------------------------------
-# HEATMAP LAYER
-# ------------------------------------------------------------
+# ----------------------------------------------------------
+# 1️⃣ HEATMAP (simple)
+# ----------------------------------------------------------
 if show_heatmap:
     heat_data = deaths[["lat", "lon", "deaths"]].values.tolist()
-
     HeatMap(
         heat_data,
         radius=35,
         blur=25,
         max_zoom=18,
-        gradient={
-            0.2: "blue",
-            0.4: "cyan",
-            0.6: "lime",
-            0.8: "yellow",
-            1.0: "red"
-        }
-    ).add_to(heat_layer)
+        gradient={0.2: "blue", 0.4: "cyan", 0.6: "lime", 0.8: "yellow", 1.0: "red"}
+    ).add_to(layer_heat)
 
-# ------------------------------------------------------------
-# KDE LAYER (Pure NumPy)
-# ------------------------------------------------------------
+# ----------------------------------------------------------
+# 2️⃣ KDE (advanced, optional)
+# ----------------------------------------------------------
 if show_kde:
+
     lat = deaths["lat"].values
     lon = deaths["lon"].values
     weights = deaths["deaths"].values
 
-    # grid
+    # Create grid
     lat_lin = np.linspace(lat.min(), lat.max(), grid_res)
     lon_lin = np.linspace(lon.min(), lon.max(), grid_res)
     xx, yy = np.meshgrid(lon_lin, lat_lin)
+    kde = np.zeros_like(xx)
 
-    kde_grid = np.zeros_like(xx)
-
-    # compute KDE
+    # Compute KDE
     for x, y, w in zip(lon, lat, weights):
-        kde_grid += w * np.exp(
-            -((xx - x) ** 2 + (yy - y) ** 2) / (2 * (bandwidth / 10000) ** 2)
-        )
+        kde += w * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * (bandwidth/10000) ** 2))
 
-    kde_grid = kde_grid / kde_grid.max()
+    kde = kde / kde.max()
 
-    # add as overlay
     folium.raster_layers.ImageOverlay(
-        kde_grid,
+        image=kde,
         bounds=[[lat.min(), lon.min()], [lat.max(), lon.max()]],
-        colormap=lambda v: (int(v * 255), int((1 - v) * 255), 0, int(v * 0.7 * 255)),
         opacity=0.6,
-    ).add_to(kde_layer)
+        colormap=lambda v: (int(v*255), int((1-v)*255), 0, int(v*255)),
+    ).add_to(layer_kde)
 
-# ------------------------------------------------------------
-# DEATH POINTS
-# ------------------------------------------------------------
+# ----------------------------------------------------------
+# 3️⃣ Death Points
+# ----------------------------------------------------------
 if show_deaths:
     for _, row in deaths.iterrows():
         folium.CircleMarker(
             location=[row["lat"], row["lon"]],
-            radius=4 + row["deaths"] * 0.7,
-            color="red", fill=True, fill_color="red",
-            fill_opacity=0.7,
-            popup=f"ID: {row['id']}<br>Deaths: {row['deaths']}<br>PumpID: {row['pumpID']}"
-        ).add_to(death_layer)
+            radius=3 + row["deaths"] * 0.7,
+            color="red", fill=True, fill_color="red", fill_opacity=0.8,
+            popup=f"ID: {row['id']}<br>Deaths: {row['deaths']}<br>Pump: {row['pumpID']}"
+        ).add_to(layer_deaths)
 
-# ------------------------------------------------------------
-# PUMPS
-# ------------------------------------------------------------
+# ----------------------------------------------------------
+# 4️⃣ Pumps
+# ----------------------------------------------------------
 if show_pumps:
     for _, row in pumps.iterrows():
         folium.CircleMarker(
             location=[row["lat"], row["lon"]],
             radius=10,
-            color="blue", fill=True, fill_color="blue", fill_opacity=0.8,
+            color="blue", fill=True, fill_color="blue",
             popup=f"Pump ID: {row['id']}<br>Name: {row['name']}"
-        ).add_to(pump_layer)
+        ).add_to(layer_pumps)
 
-# ------------------------------------------------------------
-# ADD LAYERS
-# ------------------------------------------------------------
-heat_layer.add_to(m)
-kde_layer.add_to(m)
-death_layer.add_to(m)
-pump_layer.add_to(m)
-
+# ----------------------------------------------------------
+# Add layers
+# ----------------------------------------------------------
+layer_heat.add_to(m)
+layer_kde.add_to(m)
+layer_deaths.add_to(m)
+layer_pumps.add_to(m)
 folium.LayerControl(collapsed=False).add_to(m)
 
-# ------------------------------------------------------------
-# DISPLAY MAP
-# ------------------------------------------------------------
+# ----------------------------------------------------------
+# Show map
+# ----------------------------------------------------------
 st_folium(m, width=1000, height=600)
