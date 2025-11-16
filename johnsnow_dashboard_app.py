@@ -248,4 +248,3 @@ st.dataframe(deaths.drop(columns="geometry"))
 
 st.subheader("Pumps Table")
 st.dataframe(pumps.drop(columns="geometry"))
-
