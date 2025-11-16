@@ -1,13 +1,5 @@
 # ============================================================
-# johnsnow_dashboard_app.py  (GeoJSON version for Streamlit)
-#
-# Folder structure in your repo:
-#   johnsnow_dashboard_app.py
-#   requirements.txt
-#   data/
-#       deaths_by_bldg.geojson
-#       pumps.geojson
-#
+# johnsnow_dashboard_app.py  (with optional SnowMap.tif basemap)
 # ============================================================
 
 import os
@@ -18,25 +10,33 @@ import folium
 import streamlit as st
 from streamlit_folium import st_folium
 
+# Try to import rasterio for TIFF overlay
+try:
+    import rasterio
+    from rasterio.warp import transform_bounds
+    RASTER_OK = True
+except ImportError:
+    RASTER_OK = False
+
 # -----------------------------
-# PATHS – RELATIVE
+# PATHS – RELATIVE TO REPO ROOT
 # -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
-# 🔹 Use GEOJSON instead of SHP (more reliable on Streamlit Cloud)
 deaths_path = os.path.join(DATA_DIR, "deaths_by_bldg.geojson")
 pumps_path  = os.path.join(DATA_DIR, "pumps.geojson")
+snowmap_path = os.path.join(DATA_DIR, "SnowMap.tif")  # optional
 
 # -----------------------------
-# LOAD DATA (CACHED)
+# LOAD VECTOR DATA (CACHED)
 # -----------------------------
 @st.cache_data
-def load_data():
+def load_vector_data():
     deaths = gpd.read_file(deaths_path)
     pumps  = gpd.read_file(pumps_path)
 
-    # Decide which column is death count
+    # Decide death column
     if "deaths" in deaths.columns:
         death_col = "deaths"
     elif "Count" in deaths.columns:
@@ -44,10 +44,9 @@ def load_data():
     else:
         raise ValueError("No 'deaths' or 'Count' column in deaths_by_bldg.geojson")
 
-    # Ensure death column is integer
     deaths[death_col] = pd.to_numeric(deaths[death_col], errors="coerce").fillna(0).astype(int)
 
-    # Geo for web (lat/lon) – if not already WGS84
+    # Reproject to WGS84 if needed
     if deaths.crs is not None and deaths.crs.to_epsg() != 4326:
         deaths_wgs = deaths.to_crs(epsg=4326)
     else:
@@ -60,14 +59,62 @@ def load_data():
 
     return deaths, pumps, deaths_wgs, pumps_wgs, death_col
 
-deaths, pumps, deaths_wgs, pumps_wgs, death_col = load_data()
+# -----------------------------
+# LOAD RASTER DATA (CACHED)
+# -----------------------------
+@st.cache_data
+def load_snowmap_tiff():
+    """Return (img_rgb, [[south, west],[north, east]]) or (None, None)."""
+    if not (RASTER_OK and os.path.exists(snowmap_path)):
+        return None, None
+
+    with rasterio.open(snowmap_path) as src:
+        img = src.read()          # (bands, H, W)
+        bounds = src.bounds
+        tif_crs = src.crs
+
+        # Transform bounds to WGS84 for Folium
+        wgs_bounds = transform_bounds(
+            tif_crs, "EPSG:4326",
+            bounds.left, bounds.bottom,
+            bounds.right, bounds.top
+        )  # (west, south, east, north)
+
+    # Make RGB
+    if img.shape[0] == 1:
+        gray = img[0]
+        img_rgb = np.stack([gray, gray, gray], axis=0)
+    elif img.shape[0] >= 3:
+        img_rgb = img[:3]
+    else:
+        return None, None
+
+    # (bands, H, W) -> (H, W, bands)
+    img_rgb = np.transpose(img_rgb, (1, 2, 0))
+
+    # Normalize 0–255 as uint8
+    img_rgb = img_rgb.astype("float32")
+    img_rgb = 255 * (img_rgb - img_rgb.min()) / (img_rgb.max() - img_rgb.min())
+    img_rgb = img_rgb.astype("uint8")
+
+    # Bounds for Folium: [[south, west], [north, east]]
+    bounds_folium = [
+        [wgs_bounds[1], wgs_bounds[0]],
+        [wgs_bounds[3], wgs_bounds[2]],
+    ]
+
+    return img_rgb, bounds_folium
+
+# Load data
+deaths, pumps, deaths_wgs, pumps_wgs, death_col = load_vector_data()
+snow_img, snow_bounds = load_snowmap_tiff()
 
 # ============================================================
 # STREAMLIT LAYOUT
 # ============================================================
 
 st.set_page_config(
-    page_title="John Snow Cholera Dashboard",
+    page_title="John Snow 1854 Cholera Dashboard",
     layout="wide"
 )
 
@@ -75,10 +122,13 @@ st.title("John Snow 1854 Cholera – Interactive Dashboard")
 
 st.markdown(
     """
-This dashboard uses **deaths_by_bldg** (deaths aggregated to buildings)  
-and **pumps** from the John Snow cholera study area.
+Data used:
 
-You can filter buildings by number of deaths and explore the map and attribute table.
+- **deaths_by_bldg** – deaths aggregated to buildings  
+- **pumps** – water pump locations  
+- **SnowMap.tif** – historical John Snow basemap (optional overlay)
+
+Use the sidebar to filter by number of deaths and to toggle the SnowMap basemap.
 """
 )
 
@@ -99,7 +149,7 @@ c4.metric("Avg deaths per building", f"{avg_deaths_bldg:.2f}")
 st.markdown("---")
 
 # -----------------------------
-# SIDEBAR FILTER
+# SIDEBAR FILTERS
 # -----------------------------
 st.sidebar.header("Filters")
 
@@ -120,16 +170,13 @@ if filter_mode == "Range":
         value=(min_d, max_d),
         step=1
     )
-
     st.sidebar.write(
         f"Showing buildings with **{death_col} between {death_range[0]} and {death_range[1]}**."
     )
-
     filtered = deaths_wgs[
         (deaths_wgs[death_col] >= death_range[0]) &
         (deaths_wgs[death_col] <= death_range[1])
     ]
-
 else:
     death_value = st.sidebar.slider(
         "Show only buildings with deaths =",
@@ -138,17 +185,25 @@ else:
         value=min_d,
         step=1
     )
-
     st.sidebar.write(
         f"Showing buildings with **{death_col} = {death_value}** only."
     )
-
     filtered = deaths_wgs[deaths_wgs[death_col] == death_value]
 
+# Checkbox to toggle SnowMap basemap if available
+show_snowmap = False
+if snow_img is not None and snow_bounds is not None:
+    show_snowmap = st.sidebar.checkbox(
+        "Show SnowMap basemap (TIFF)",
+        value=True
+    )
+else:
+    st.sidebar.info("SnowMap.tif not found or rasterio not available – using only web basemap.")
+
 # -----------------------------
-# MAP SECTION
+# BUILD MAP
 # -----------------------------
-st.subheader("Interactive Map (Folium)")
+st.subheader("Interactive Map")
 
 if not filtered.empty:
     center_lat = filtered.geometry.y.mean()
@@ -162,6 +217,16 @@ m = folium.Map(
     zoom_start=17,
     tiles="CartoDB Positron"
 )
+
+# --- Optional SnowMap overlay ---
+if snow_img is not None and snow_bounds is not None:
+    folium.raster_layers.ImageOverlay(
+        image=snow_img,
+        bounds=snow_bounds,
+        opacity=0.8,
+        name="SnowMap basemap (TIFF)",
+        show=show_snowmap
+    ).add_to(m)
 
 # --- Deaths layer (filtered) ---
 death_layer = folium.FeatureGroup(name="Deaths by Building (filtered)")
@@ -210,7 +275,6 @@ for _, row in pumps_wgs.iterrows():
 pumps_layer.add_to(m)
 
 folium.LayerControl().add_to(m)
-
 st_folium(m, width=900, height=600)
 
 # -----------------------------
