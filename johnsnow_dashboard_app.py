@@ -2,6 +2,7 @@ import streamlit as st
 import pydeck as pdk
 import numpy as np
 import pandas as pd
+from pyproj import Transformer
 
 st.set_page_config(layout="wide")
 
@@ -23,14 +24,18 @@ if deaths_file is None or pumps_file is None:
 deaths = pd.read_csv(deaths_file)
 pumps  = pd.read_csv(pumps_file)
 
-# Check required columns
-required_cols = {"lat", "lon"}
-if not required_cols.issubset(deaths.columns):
-    st.error("❌ deaths.csv must contain columns: lat, lon, deaths")
-    st.stop()
-if not required_cols.issubset(pumps.columns):
-    st.error("❌ pumps.csv must contain columns: lat, lon")
-    st.stop()
+# =======================================================
+# CONVERT COORD_X / COORD_Y → LAT / LON
+# =======================================================
+transformer = Transformer.from_crs("EPSG:27700", "EPSG:4326", always_xy=True)
+
+deaths["lon"], deaths["lat"] = transformer.transform(
+    deaths["COORD_X"].values, deaths["COORD_Y"].values
+)
+
+pumps["lon"], pumps["lat"] = transformer.transform(
+    pumps["COORD_X"].values, pumps["COORD_Y"].values
+)
 
 # =======================================================
 # KDE Toggle
@@ -60,6 +65,7 @@ if kde_toggle:
         d2 = (grid_flat[0] - p[0])**2 + (grid_flat[1] - p[1])**2
         z += np.exp(-d2 / (2 * BANDWIDTH * BANDWIDTH))
 
+    # Normalize 0–1
     z_norm = (z - z.min()) / (z.max() - z.min())
 
     kde_df = pd.DataFrame({
@@ -101,13 +107,13 @@ layers.append(
         "ScatterplotLayer",
         data=pumps,
         get_position='[lon, lat]',
-        get_radius=25,
+        get_radius=30,
         get_fill_color='[0, 0, 255, 180]',
         pickable=True
     )
 )
 
-# KDE layer
+# KDE column layer
 if kde_toggle and len(kde_df) > 0:
     layers.append(
         pdk.Layer(
@@ -125,7 +131,7 @@ if kde_toggle and len(kde_df) > 0:
 r = pdk.Deck(
     layers=layers,
     initial_view_state=VIEW,
-    map_style="mapbox://styles/mapbox/light-v10",
+    map_style="mapbox://styles/mapbox/light-v10"
 )
 
 st.pydeck_chart(r)
@@ -135,8 +141,8 @@ if kde_toggle:
     st.markdown("""
     ### KDE Legend  
     🟥 **High Cholera Intensity**  
-    🟧 **Moderate Intensity**  
-    🟨 **Low Intensity**
+    🟧 **Moderate**  
+    🟨 **Low**
     """)
 
 # Tables
