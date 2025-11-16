@@ -3,32 +3,30 @@ import pydeck as pdk
 import numpy as np
 import pandas as pd
 
-# Try SciPy KDE
-try:
-    from scipy.stats import gaussian_kde
-    SCIPY_OK = True
-except:
-    SCIPY_OK = False
-
 st.set_page_config(layout="wide")
-st.title("John Snow Cholera Dashboard – KDE Without scikit-learn")
+
+st.title("John Snow Cholera Dashboard – KDE (Pure NumPy Version)")
 
 # =======================================================
-# LOAD DATA
+# LOAD YOUR DATA
 # =======================================================
-deaths = pd.read_csv("deaths.csv")   # lat, lon, deaths
-pumps  = pd.read_csv("pumps.csv")    # lat, lon, name/id
+# Make sure these CSV have columns: lat, lon, deaths
+deaths = pd.read_csv("deaths.csv")
+pumps  = pd.read_csv("pumps.csv")
 
 # =======================================================
 # KDE Toggle
 # =======================================================
 kde_toggle = st.sidebar.checkbox("Show KDE Risk Surface", value=False)
 
-GRID_SIZE = 200  # KDE grid resolution
+GRID_SIZE = 200    # Higher = smoother (but slower)
+BANDWIDTH = 0.0009 # Change this to adjust smoothness
 
 if kde_toggle:
 
-    # GRID BOUNDS
+    # -----------------------------------------------
+    # BUILD GRID AROUND DATA
+    # -----------------------------------------------
     min_lat, max_lat = deaths.lat.min(), deaths.lat.max()
     min_lon, max_lon = deaths.lon.min(), deaths.lon.max()
 
@@ -36,35 +34,27 @@ if kde_toggle:
     lon_space = np.linspace(min_lon, max_lon, GRID_SIZE)
 
     lon_grid, lat_grid = np.meshgrid(lon_space, lat_space)
-    grid_points = np.vstack([lat_grid.ravel(), lon_grid.ravel()])
 
-    # =======================================================
-    # METHOD 1: SciPy KDE (BEST)
-    # =======================================================
-    if SCIPY_OK:
-        kde = gaussian_kde(deaths[["lat", "lon"]].T, bw_method=0.08)
-        z = kde(grid_points)
-        z_norm = (z - z.min()) / (z.max() - z.min())
+    # Flatten grid
+    grid_flat = np.vstack([lat_grid.ravel(), lon_grid.ravel()])
 
-    else:
-        # =======================================================
-        # METHOD 2: NUMPY FALLBACK KDE  (works everywhere)
-        # Very fast, moderately smooth
-        # =======================================================
-        pts = deaths[["lat", "lon"]].values
+    pts = deaths[["lat", "lon"]].values
 
-        z = np.zeros(grid_points.shape[1])
-        bandwidth = 0.0008
+    # -----------------------------------------------
+    # PURE NUMPY KDE
+    # -----------------------------------------------
+    z = np.zeros(grid_flat.shape[1])
 
-        for p in pts:
-            d2 = (grid_points[0] - p[0])**2 + (grid_points[1] - p[1])**2
-            z += np.exp(-d2 / (2 * bandwidth * bandwidth))
+    for p in pts:
+        d2 = (grid_flat[0] - p[0])**2 + (grid_flat[1] - p[1])**2
+        z += np.exp(-d2 / (2 * BANDWIDTH * BANDWIDTH))
 
-        z_norm = (z - z.min()) / (z.max() - z.min())
+    # Normalize 0–1
+    z_norm = (z - z.min()) / (z.max() - z.min())
 
     kde_df = pd.DataFrame({
-        "lat": grid_points[0],
-        "lon": grid_points[1],
+        "lat": grid_flat[0],
+        "lon": grid_flat[1],
         "density": z_norm
     })
 
@@ -83,7 +73,9 @@ VIEW = pdk.ViewState(
 
 layers = []
 
+# -------------------------------------------------------
 # DEATH POINTS
+# -------------------------------------------------------
 layers.append(
     pdk.Layer(
         "ScatterplotLayer",
@@ -95,7 +87,9 @@ layers.append(
     )
 )
 
+# -------------------------------------------------------
 # PUMPS
+# -------------------------------------------------------
 layers.append(
     pdk.Layer(
         "ScatterplotLayer",
@@ -107,7 +101,9 @@ layers.append(
     )
 )
 
-# KDE SURFACE
+# -------------------------------------------------------
+# KDE SURFACE (3D Column Layer)
+# -------------------------------------------------------
 if kde_toggle and len(kde_df) > 0:
     layers.append(
         pdk.Layer(
@@ -116,12 +112,15 @@ if kde_toggle and len(kde_df) > 0:
             get_position='[lon, lat]',
             get_elevation='density * 200',
             radius=3,
-            get_fill_color='[255 * density, 180 * density, 0, 180]',
-            elevation_scale=40
+            get_fill_color='[255 * density, 160 * density, 0, 180]',
+            elevation_scale=40,
+            pickable=False
         )
     )
 
+# -------------------------------------------------------
 # RENDER MAP
+# -------------------------------------------------------
 r = pdk.Deck(
     layers=layers,
     initial_view_state=VIEW,
@@ -130,18 +129,22 @@ r = pdk.Deck(
 
 st.pydeck_chart(r)
 
+# -------------------------------------------------------
 # LEGEND
+# -------------------------------------------------------
 if kde_toggle:
     st.markdown("""
     ### KDE Legend  
-    **Red / Orange = High Cholera Intensity**  
-    **Yellow = Medium**  
-    **Light Yellow = Low**
+    - **Red/Orange** = High Cholera Intensity  
+    - **Yellow** = Medium  
+    - **Light Yellow** = Low  
     """)
 
+# -------------------------------------------------------
 # DATA TABLES
-st.subheader("Deaths Table")
+# -------------------------------------------------------
+st.subheader("Deaths Data")
 st.dataframe(deaths)
 
-st.subheader("Pumps Table")
+st.subheader("Pumps Data")
 st.dataframe(pumps)
