@@ -9,7 +9,7 @@ from streamlit_folium import st_folium
 
 
 # ============================================================
-# SAFE PATH HANDLING
+# SAFE PATHS
 # ============================================================
 
 try:
@@ -19,11 +19,11 @@ except:
 
 DATA_DIR = BASE_DIR / "data"
 
-# SnowMap TIFF — detect existence
+# detect TIFF
 snowmap_path = None
-for name in ["SnowMap.tif", "SnowMap.tiff"]:
-    if (DATA_DIR / name).exists():
-        snowmap_path = DATA_DIR / name
+for tifname in ["SnowMap.tif", "SnowMap.tiff"]:
+    if (DATA_DIR / tifname).exists():
+        snowmap_path = DATA_DIR / tifname
         break
 
 deaths_path = DATA_DIR / "deaths_by_bldg.geojson"
@@ -47,28 +47,27 @@ def load_vector():
     deaths = gpd.read_file(deaths_path)
     pumps = gpd.read_file(pumps_path)
 
-    # detect death column
     if "deaths" in deaths.columns:
-        death_col = "deaths"
+        dc = "deaths"
     elif "Count" in deaths.columns:
-        death_col = "Count"
+        dc = "Count"
     else:
-        st.error("No deaths column found!")
+        st.error("No deaths column found.")
         return None
 
-    deaths[death_col] = pd.to_numeric(deaths[death_col], errors="coerce").fillna(0).astype(int)
+    deaths[dc] = pd.to_numeric(deaths[dc], errors="coerce").fillna(0).astype(int)
 
     deaths_wgs = deaths.to_crs(epsg=4326)
     pumps_wgs  = pumps.to_crs(epsg=4326)
 
-    return deaths, pumps, deaths_wgs, pumps_wgs, death_col
+    return deaths, pumps, deaths_wgs, pumps_wgs, dc
 
 
 # ============================================================
-# LOAD SNOWMAP TIFF — NO CACHE
+# TIFF LOAD — NO CACHE
 # ============================================================
 
-def load_snowmap(deaths_wgs):
+def load_snowmap_tif(deaths_wgs):
 
     if not (RASTER_OK and snowmap_path):
         return None, None
@@ -79,26 +78,24 @@ def load_snowmap(deaths_wgs):
             tif_crs = src.crs
             b = src.bounds
     except Exception as e:
-        st.error(f"TIFF load error: {e}")
+        st.error(f"TIFF error: {e}")
         return None, None
 
-    # If TIFF has NO CRS, auto-fit to data bounds
+    # If no CRS → auto-fit
     if tif_crs is None:
         minx, miny, maxx, maxy = deaths_wgs.total_bounds
-        px = 0.05 * (maxx - minx)
-        py = 0.05 * (maxy - miny)
+        px = (maxx - minx) * 0.05
+        py = (maxy - miny) * 0.05
         bounds = [[miny - py, minx - px], [maxy + py, maxx + px]]
     else:
         try:
-            wb = transform_bounds(
-                tif_crs, "EPSG:4326",
-                b.left, b.bottom, b.right, b.top
-            )
+            wb = transform_bounds(tif_crs, "EPSG:4326",
+                                  b.left, b.bottom, b.right, b.top)
             bounds = [[wb[1], wb[0]], [wb[3], wb[2]]]
         except:
             bounds = [[b.bottom, b.left], [b.top, b.right]]
 
-    # Convert to RGB
+    # convert to RGB
     if arr.shape[0] == 1:
         g = arr[0]
         rgb = np.stack([g, g, g], axis=0)
@@ -121,40 +118,53 @@ if loaded is None:
     st.stop()
 
 deaths, pumps, deaths_wgs, pumps_wgs, death_col = loaded
-snow_img, snow_bounds = load_snowmap(deaths_wgs)
+snow_img, snow_bounds = load_snowmap_tif(deaths_wgs)
 
 
 # ============================================================
-# UI LAYOUT
+# UI HEADER
 # ============================================================
 
-st.set_page_config(page_title="John Snow Dashboard", layout="wide")
+st.set_page_config(page_title="John Snow Cholera Dashboard", layout="wide")
 st.title("John Snow 1854 Cholera – GIS Dashboard")
 
 
-# TOP METRICS
+# METRIC BAR
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Deaths", int(deaths[death_col].sum()))
 c2.metric("Buildings", len(deaths))
-c3.metric("Max Deaths per Building", int(deaths[death_col].max()))
-c4.metric("Average Deaths", f"{deaths[death_col].mean():.2f}")
+c3.metric("Max Deaths", int(deaths[death_col].max()))
+c4.metric("Avg Deaths", f"{deaths[death_col].mean():.2f}")
 
 st.markdown("---")
 
 
-# MAP SETTINGS EXPANDER
-with st.expander("🗺️ Map Settings"):
+# ============================================================
+# MAP SETTINGS
+# ============================================================
+
+with st.expander("🗺️ Basemap & Marker Settings"):
     basemap_choice = st.selectbox(
-        "Basemap Style",
+        "Basemap",
         ["cartodbpositron", "OpenStreetMap", "Stamen Toner"]
     )
-
     opacity = st.slider("SnowMap Opacity", 0.0, 1.0, 0.75, 0.05)
-    scaler = st.slider("Death Marker Scale", 0.2, 1.5, 0.4, 0.1)
+    scale_factor = st.slider("Death Marker Scale", 0.2, 1.5, 0.4, 0.1)
 
 
 # ============================================================
-# BUILD MAP
+# ALIGNMENT TOOLS
+# ============================================================
+
+with st.expander("📐 SnowMap Alignment Tools (Shift / Scale / Rotate)"):
+    shift_x = st.slider("Shift East/West", -0.003, 0.003, 0.0, 0.0001)
+    shift_y = st.slider("Shift North/South", -0.003, 0.003, 0.0, 0.0001)
+    scale_adj = st.slider("Scale (Zoom in/out)", 0.90, 1.10, 1.00, 0.005)
+    rotation_deg = st.slider("Rotation (degrees)", -10.0, 10.0, 0.0, 0.1)
+
+
+# ============================================================
+# MAP
 # ============================================================
 
 st.subheader("Interactive Map")
@@ -168,52 +178,94 @@ m = folium.Map(
     tiles=basemap_choice
 )
 
-# SnowMap overlay
-if snow_img is not None:
+# Apply alignment to bounds
+if snow_img is not None and snow_bounds is not None:
+
+    (south, west), (north, east) = snow_bounds
+
+    # Center for scale/rotation
+    cx = (west + east) / 2
+    cy = (south + north) / 2
+
+    # SCALE
+    west = cx + (west - cx) * scale_adj
+    east = cx + (east - cx) * scale_adj
+    south = cy + (south - cy) * scale_adj
+    north = cy + (north - cy) * scale_adj
+
+    # SHIFT
+    west += shift_x
+    east += shift_x
+    south += shift_y
+    north += shift_y
+
+    # ROTATION
+    # Convert bounds to 4 corner points
+    pts = np.array([
+        [west, south],
+        [west, north],
+        [east, north],
+        [east, south]
+    ])
+
+    theta = np.radians(rotation_deg)
+    rot = np.array([[np.cos(theta), -np.sin(theta)],
+                    [np.sin(theta),  np.cos(theta)]])
+
+    pts_rot = (pts - [cx, cy]) @ rot + [cx, cy]
+
+    # recompute bounding box
+    west_new, south_new = pts_rot.min(axis=0)
+    east_new, north_new = pts_rot.max(axis=0)
+
+    aligned_bounds = [[south_new, west_new], [north_new, east_new]]
+
     folium.raster_layers.ImageOverlay(
         snow_img,
-        snow_bounds,
-        name="SnowMap",
+        aligned_bounds,
         opacity=opacity,
+        name="SnowMap (Aligned)",
         show=True
     ).add_to(m)
 
-# Death layer
-fg_death = folium.FeatureGroup("Deaths")
+
+# Deaths
+fg_d = folium.FeatureGroup("Deaths")
 for _, row in deaths_wgs.iterrows():
     d = int(row[death_col])
     folium.CircleMarker(
         [row.geometry.y, row.geometry.x],
-        radius=3 + d * scaler,
+        radius=3 + d * scale_factor,
         color="red",
         fill=True,
         fill_opacity=0.7,
         popup=f"Deaths: {d}"
-    ).add_to(fg_death)
-fg_death.add_to(m)
+    ).add_to(fg_d)
+fg_d.add_to(m)
 
 # Pumps
-fg_pump = folium.FeatureGroup("Pumps")
+fg_p = folium.FeatureGroup("Pumps")
 for _, row in pumps_wgs.iterrows():
-    info = "<b>Water Pump</b><br>" + "<br>".join(
-        f"{col}: {row[col]}" for col in pumps.columns if col != "geometry"
+    txt = "<b>Water Pump</b><br>" + "<br>".join(
+        f"{c}: {row[c]}" for c in pumps.columns if c != "geometry"
     )
     folium.Marker(
         [row.geometry.y, row.geometry.x],
-        icon=folium.Icon(color="blue", icon="tint", prefix="fa"),
-        popup=info
-    ).add_to(fg_pump)
-fg_pump.add_to(m)
+        icon=folium.Icon(color="blue", icon="tint"),
+        popup=txt
+    ).add_to(fg_p)
+fg_p.add_to(m)
 
 folium.LayerControl().add_to(m)
 
-# 🟢 FIX: No rerun when moving the map
+
+# 🟢 do not allow rerun on map drag
 st_folium(
     m,
     width=1100,
     height=650,
     key="mainmap",
-    returned_objects=[]  # prevents rerun on pan/zoom
+    returned_objects=[]
 )
 
 
@@ -222,7 +274,6 @@ st_folium(
 # ============================================================
 
 st.markdown("---")
-
 st.subheader("Building Attributes")
 st.dataframe(deaths_wgs.drop(columns="geometry"))
 
