@@ -36,9 +36,11 @@ def load_vectors():
         st.error("No deaths column found.")
         return None
 
-    deaths[death_col] = pd.to_numeric(deaths[death_col], errors="coerce").fillna(0).astype(int)
+    deaths[death_col] = pd.to_numeric(
+        deaths[death_col], errors="coerce"
+    ).fillna(0).astype(int)
 
-    # Convert to WGS84 if needed
+    # Convert CRS → WGS84
     if deaths.crs and deaths.crs.to_epsg() != 4326:
         deaths = deaths.to_crs(4326)
     if pumps.crs and pumps.crs.to_epsg() != 4326:
@@ -56,7 +58,7 @@ deaths, pumps, death_col = loaded
 # STREAMLIT PAGE
 # ============================================================
 st.set_page_config(page_title="John Snow Dashboard", layout="wide")
-st.title("John Snow Cholera Map – Clean Version (No TIFF)")
+st.title("John Snow Cholera Map")
 
 # ============================================================
 # SUMMARY METRICS
@@ -74,40 +76,69 @@ st.markdown("---")
 # ============================================================
 st.subheader("Interactive Map")
 
-# Compute center
 center_lat = deaths.geometry.y.mean()
 center_lon = deaths.geometry.x.mean()
 
-m = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="CartoDB Positron")
+m = folium.Map(
+    location=[center_lat, center_lon],
+    zoom_start=17,
+    tiles="CartoDB Positron"
+)
 
-# Layer: deaths
+# ============================================================
+# DEATH MARKERS (ID + PumpID)
+# ============================================================
 fg_deaths = folium.FeatureGroup("Deaths")
+
 for _, row in deaths.iterrows():
     lat = row.geometry.y
     lon = row.geometry.x
-    d = row[death_col]
+
+    # Extract fields safely
+    death_id  = row.get("ID", "N/A")
+    pump_id   = row.get("PumpID", row.get("pumpID", "N/A"))
+    deaths_n  = row[death_col]
+
+    popup_html = f"""
+    <b>Death Record</b><br>
+    ID: {death_id}<br>
+    PumpID: {pump_id}<br>
+    Deaths: {deaths_n}<br>
+    """
 
     folium.CircleMarker(
-        location=[lat, lon],
-        radius=4 + d * 0.3,
+        [lat, lon],
+        radius=4 + deaths_n * 0.3,
         color="red",
         fill=True,
         fill_opacity=0.85,
-        popup=f"Deaths: {d}"
+        popup=popup_html
     ).add_to(fg_deaths)
 
 fg_deaths.add_to(m)
 
-# Layer: pumps
+# ============================================================
+# PUMP MARKERS (ID + Name)
+# ============================================================
 fg_pumps = folium.FeatureGroup("Pumps")
+
 for _, row in pumps.iterrows():
     lat = row.geometry.y
     lon = row.geometry.x
 
+    pump_id = row.get("ID", "N/A")
+    pump_name = row.get("name", row.get("Name", row.get("PUMP", "Unknown")))
+
+    popup_html = f"""
+    <b>Water Pump</b><br>
+    ID: {pump_id}<br>
+    Name: {pump_name}<br>
+    """
+
     folium.Marker(
         [lat, lon],
         icon=folium.Icon(color="blue", icon="tint"),
-        popup="Water Pump"
+        popup=popup_html
     ).add_to(fg_pumps)
 
 fg_pumps.add_to(m)
@@ -115,7 +146,7 @@ fg_pumps.add_to(m)
 # Add layer control
 folium.LayerControl().add_to(m)
 
-# Display map
+# Show map
 st_folium(m, width=1000, height=600)
 
 # ============================================================
