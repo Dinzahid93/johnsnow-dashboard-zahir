@@ -3,16 +3,14 @@ import pathlib
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import folium
 import streamlit as st
 from streamlit_folium import st_folium
-
+import folium
 import rasterio
 
 # ============================================================
 # PATHS
 # ============================================================
-
 try:
     BASE_DIR = pathlib.Path(__file__).parent
 except:
@@ -24,118 +22,119 @@ snowmap_path = DATA_DIR / "SnowMap.tif"
 deaths_path = DATA_DIR / "deaths_by_bldg.geojson"
 pumps_path  = DATA_DIR / "pumps.geojson"
 
-# ============================================================
-# LOAD VECTOR DATA (NO CRS TRANSFORMATION)
-# ============================================================
 
+# ============================================================
+# LOAD VECTOR DATA (no CRS transform)
+# ============================================================
 @st.cache_data
-def load_vector():
+def load_vectors():
     deaths = gpd.read_file(deaths_path)
     pumps = gpd.read_file(pumps_path)
 
-    # detect column
+    # identify deaths column
     if "deaths" in deaths.columns:
-        dc = "deaths"
+        death_col = "deaths"
     elif "Count" in deaths.columns:
-        dc = "Count"
+        death_col = "Count"
     else:
-        st.error("No deaths column found.")
+        st.error("Could not find a 'deaths' column.")
         return None
 
-    deaths[dc] = pd.to_numeric(deaths[dc], errors="coerce").fillna(0).astype(int)
+    deaths[death_col] = pd.to_numeric(deaths[death_col], errors="coerce").fillna(0).astype(int)
 
-    # DO NOT convert CRS
-    return deaths, pumps, dc
+    return deaths, pumps, death_col
 
 
 # ============================================================
-# LOAD TIFF + GET PIXEL BOUNDS
+# LOAD TIFF (Simple CRS → pixel coordinates)
 # ============================================================
-
-def load_tiff_bounds():
-
+def load_tiff_simple():
     if not snowmap_path.exists():
+        st.warning("SnowMap.tif not found.")
         return None, None
 
-    with rasterio.open(snowmap_path) as src:
-        arr = src.read()
-        h = src.height
-        w = src.width
+    try:
+        with rasterio.open(snowmap_path) as src:
+            arr = src.read()
+            h = src.height
+            w = src.width
 
-    # Convert to RGB
-    if arr.shape[0] == 1:
-        g = arr[0]
-        rgb = np.stack([g, g, g], axis=2)
-    else:
-        rgb = np.transpose(arr[:3], (1, 2, 0))
+        # Create RGB fallback
+        if arr.shape[0] == 1:
+            g = arr[0]
+            rgb = np.stack([g, g, g], axis=2)
+        else:
+            rgb = np.transpose(arr[:3], (1, 2, 0))
 
-    # normalize 0–255
-    rgb = rgb.astype("float32")
-    rgb = 255 * (rgb - rgb.min()) / (rgb.max() - rgb.min())
-    rgb = rgb.astype("uint8")
+        # Normalize to 0–255
+        rgb = rgb.astype("float32")
+        rgb = 255 * (rgb - rgb.min()) / (rgb.max() - rgb.min())
+        rgb = rgb.astype("uint8")
 
-    # bounds in pixel CRS (top-left = 0,0)
-    # folium simple CRS uses [y,x] structure
-    bounds = [[0, 0], [h, w]]
+        bounds = [[0, 0], [h, w]]  # pixel CRS
 
-    return rgb, bounds
+        return rgb, bounds
+
+    except Exception as e:
+        st.error(f"Failed to load TIFF: {e}")
+        return None, None
 
 
 # ============================================================
 # LOAD DATA
 # ============================================================
-
-loaded = load_vector()
+loaded = load_vectors()
 if loaded is None:
     st.stop()
 
 deaths, pumps, death_col = loaded
-snow_img, snow_bounds = load_tiff_bounds()
+snow_img, snow_bounds = load_tiff_simple()
 
 
 # ============================================================
-# UI HEADER
+# STREAMLIT PAGE
 # ============================================================
+st.set_page_config(page_title="John Snow Map", layout="wide")
+st.title("John Snow Cholera Map (Simple CRS – Pixel Coordinates)")
 
-st.set_page_config(page_title="John Snow (Simple CRS)", layout="wide")
-st.title("John Snow Cholera Map (Simple CRS Mode)")
-
-
-# METRICS
+# Metrics
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Deaths", int(deaths[death_col].sum()))
 c2.metric("Buildings", len(deaths))
 c3.metric("Max Deaths", int(deaths[death_col].max()))
-c4.metric("Avg Deaths", f"{deaths[death_col].mean():.2f}")
+c4.metric("Avg Deaths", f"{deaths[death_col].mean():.1f}")
 
 st.markdown("---")
 
-# Marker size control
-scale_factor = st.slider("Death marker scale", 0.2, 1.5, 0.4)
-
 
 # ============================================================
-# MAP — SIMPLE CRS (PIXEL COORDINATES)
+# MAP (Simple CRS - no slider)
 # ============================================================
+st.subheader("Interactive Map")
 
-st.subheader("Interactive Map (Simple CRS)")
+if snow_bounds is None:
+    st.error("Cannot display map: SnowMap.tif failed to load.")
+    st.stop()
+
+# center map on raster center
+center_y = snow_bounds[1][0] / 2
+center_x = snow_bounds[1][1] / 2
 
 m = folium.Map(
-    location=[snow_bounds[1][0] / 2, snow_bounds[1][1] / 2],  # center of image
+    location=[center_y, center_x],
     zoom_start=1,
-    crs="Simple"   # <---- THIS FIXES EVERYTHING
+    crs="Simple"  # IMPORTANT!
 )
 
-# add TIFF as pixel overlay
-if snow_img is not None:
-    folium.raster_layers.ImageOverlay(
-        snow_img,
-        bounds=snow_bounds,
-        opacity=0.9,
-        name="SnowMap"
-    ).add_to(m)
+# add TIFF overlay
+folium.raster_layers.ImageOverlay(
+    snow_img,
+    bounds=snow_bounds,
+    opacity=0.9,
+    name="SnowMap"
+).add_to(m)
 
-# deaths layer (pixel coordinates)
+# Death markers (fixed size)
 fg_d = folium.FeatureGroup("Deaths")
 for _, row in deaths.iterrows():
     x = row.geometry.x
@@ -143,16 +142,16 @@ for _, row in deaths.iterrows():
     d = row[death_col]
 
     folium.CircleMarker(
-        [y, x],             # pixel CRS
-        radius=3 + d * scale_factor,
+        [y, x],
+        radius=4 + (d * 0.3),  # fixed scale (no slider)
         color="red",
         fill=True,
-        fill_opacity=0.8,
+        fill_opacity=0.85,
         popup=f"Deaths: {d}"
     ).add_to(fg_d)
 fg_d.add_to(m)
 
-# pumps layer
+# Pumps
 fg_p = folium.FeatureGroup("Pumps")
 for _, row in pumps.iterrows():
     x = row.geometry.x
@@ -167,14 +166,12 @@ fg_p.add_to(m)
 
 folium.LayerControl().add_to(m)
 
-# no rerun on pan
-st_folium(m, width=1100, height=650, key="mainmap", returned_objects=[])
+st_folium(m, width=1100, height=650, key="map")
 
 
 # ============================================================
-# TABLES
+# ATTRIBUTE TABLES
 # ============================================================
-
 st.markdown("---")
 st.subheader("Building Attributes")
 st.dataframe(deaths.drop(columns="geometry"))
