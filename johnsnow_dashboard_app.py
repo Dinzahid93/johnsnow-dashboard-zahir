@@ -1,250 +1,153 @@
-import os
-import pathlib
-import geopandas as gpd
-import pandas as pd
 import streamlit as st
-import folium
-from shapely.ops import nearest_points
-from streamlit_folium import st_folium
-from folium.plugins import HeatMap
+import pydeck as pdk
+import numpy as np
+import pandas as pd
+from sklearn.neighbors import KernelDensity
 
-# ============================================================
-# ADD HEATMAP LEGEND FUNCTION
-# ============================================================
-def add_heatmap_legend(m):
-    legend_html = """
-    <div style="
-        position: fixed;
-        bottom: 30px;
-        left: 30px;
-        z-index: 9999;
-        background: white;
-        padding: 10px;
-        border-radius: 6px;
-        font-size: 14px;
-        box-shadow: 0 0 8px rgba(0,0,0,0.3);
-        ">
-        <b>Heatmap Intensity</b><br>
-        <div style="width: 140px; height: 14px;
-            background: linear-gradient(to right,
-                rgba(0,0,255,0.9),
-                rgba(0,255,255,0.9),
-                rgba(0,255,0,0.9),
-                rgba(255,255,0,0.9),
-                rgba(255,0,0,0.9)
-            );
-            margin-top:5px;
-            border:1px solid #999;">
-        </div>
-        <div style="font-size:11px;">
-            Low&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;High
-        </div>
-    </div>
-    """
-    m.get_root().html.add_child(folium.Element(legend_html))
+st.set_page_config(layout="wide")
 
-# ============================================================
-# PATHS
-# ============================================================
-try:
-    BASE_DIR = pathlib.Path(__file__).parent
-except:
-    BASE_DIR = pathlib.Path(os.getcwd())
+st.title("John Snow Cholera Dashboard – With KDE Surface")
 
-DATA_DIR = BASE_DIR / "data"
+# =======================================================
+# LOAD DATA (replace with your paths)
+# =======================================================
+deaths = pd.read_csv("deaths.csv")   # must contain: lat, lon, deaths
+pumps  = pd.read_csv("pumps.csv")    # must contain: lat, lon, name/id
 
-deaths_path = DATA_DIR / "deaths_by_bldg.geojson"
-pumps_path  = DATA_DIR / "pumps.geojson"
+# If your data uses geometry fields, convert:
+# deaths["lat"] = deaths.geometry.y
+# deaths["lon"] = deaths.geometry.x
 
-# ============================================================
-# LOAD VECTOR DATA
-# ============================================================
-@st.cache_data
-def load_vectors():
-    deaths = gpd.read_file(deaths_path)
-    pumps  = gpd.read_file(pumps_path)
+# =======================================================
+# KDE COMPUTATION
+# =======================================================
+kde_toggle = st.sidebar.checkbox("Show KDE Risk Surface", value=False)
 
-    # Identify deaths field
-    if "deaths" in deaths.columns:
-        death_col = "deaths"
-    elif "Count" in deaths.columns:
-        death_col = "Count"
-    else:
-        st.error("No deaths field found.")
-        return None
+# KDE grid resolution (higher = smoother but slower)
+GRID_SIZE = 200
 
-    deaths[death_col] = pd.to_numeric(deaths[death_col], errors="coerce").fillna(0).astype(int)
+if kde_toggle:
 
-    # CRS to WGS84
-    if deaths.crs and deaths.crs.to_epsg() != 4326:
-        deaths = deaths.to_crs(4326)
-    if pumps.crs and pumps.crs.to_epsg() != 4326:
-        pumps = pumps.to_crs(4326)
+    # Build grid bounds
+    min_lat, max_lat = deaths.lat.min(), deaths.lat.max()
+    min_lon, max_lon = deaths.lon.min(), deaths.lon.max()
 
-    return deaths, pumps, death_col
+    lat_space = np.linspace(min_lat, max_lat, GRID_SIZE)
+    lon_space = np.linspace(min_lon, max_lon, GRID_SIZE)
+    lon_grid, lat_grid = np.meshgrid(lon_space, lat_space)
 
-loaded = load_vectors()
-if loaded is None:
-    st.stop()
+    grid_points = np.vstack([lat_grid.ravel(), lon_grid.ravel()]).T
 
-deaths, pumps, death_col = loaded
+    # KDE model
+    kde_model = KernelDensity(
+        bandwidth=0.0008,       # adjust for smoothness
+        kernel="gaussian"
+    )
 
-# ============================================================
-# NEAREST PUMP ANALYSIS
-# ============================================================
-def add_nearest_pump_analysis(deaths, pumps):
-    deaths_proj = deaths.to_crs(3857)
-    pumps_proj  = pumps.to_crs(3857)
+    kde_model.fit(deaths[["lat", "lon"]])
 
-    pump_geoms = pumps_proj.geometry
-    nearest_ids = []
-    nearest_dist = []
+    z = np.exp(kde_model.score_samples(grid_points))
+    z_norm = (z - z.min()) / (z.max() - z.min())
 
-    for _, row in deaths_proj.iterrows():
-        point = row.geometry
-        nearest_geom = nearest_points(point, pump_geoms.unary_union)[1]
+    kde_df = pd.DataFrame({
+        "lat": grid_points[:, 0],
+        "lon": grid_points[:, 1],
+        "density": z_norm
+    })
 
-        pump_row = pumps_proj[pumps_proj.geometry == nearest_geom]
-        pump_id = pump_row.iloc[0].get("ID", "N/A") if not pump_row.empty else "N/A"
+else:
+    kde_df = pd.DataFrame(columns=["lat", "lon", "density"])
 
-        distance = point.distance(nearest_geom)
-
-        nearest_ids.append(pump_id)
-        nearest_dist.append(distance)
-
-    deaths["nearest_pump_id"] = nearest_ids
-    deaths["distance_to_pump_m"] = nearest_dist
-
-    return deaths
-
-deaths = add_nearest_pump_analysis(deaths, pumps)
-
-# ============================================================
-# STREAMLIT PAGE
-# ============================================================
-st.set_page_config(page_title="John Snow Dashboard", layout="wide")
-st.title("John Snow Cholera Map - Dashboard")
-
-# ============================================================
-# SIDEBAR TOGGLES
-# ============================================================
-st.sidebar.header("Map Layers")
-show_heatmap = st.sidebar.checkbox("Show Heatmap of Deaths", value=True)
-
-# ============================================================
-# SUMMARY METRICS
-# ============================================================
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Deaths", int(deaths[death_col].sum()))
-c2.metric("Buildings", len(deaths))
-c3.metric("Max Deaths", int(deaths[death_col].max()))
-c4.metric("Avg Distance to Pump (m)", f"{deaths['distance_to_pump_m'].mean():.1f}")
-
-st.markdown("---")
-
-# ============================================================
-# INTERACTIVE MAP
-# ============================================================
-st.subheader("Interactive Map")
-
-center_lat = deaths.geometry.y.mean()
-center_lon = deaths.geometry.x.mean()
-
-m = folium.Map(
-    location=[center_lat, center_lon],
-    zoom_start=17,
-    tiles="CartoDB Positron"
+# =======================================================
+# MAP VIEW
+# =======================================================
+VIEW = pdk.ViewState(
+    latitude=deaths.lat.mean(),
+    longitude=deaths.lon.mean(),
+    zoom=16,
+    pitch=45,
+    bearing=0
 )
 
-# ============================================================
-# HEATMAP (IF ENABLED)
-# ============================================================
-if show_heatmap:
-    heat_data = [
-        [row.geometry.y, row.geometry.x, row[death_col]]
-        for _, row in deaths.iterrows()
-    ]
+# =======================================================
+# LAYERS
+# =======================================================
 
-    HeatMap(
-        heat_data,
-        name="Death Heatmap",
-        radius=25,
-        blur=15,
-        max_zoom=17,
-    ).add_to(m)
+layers = []
 
-    add_heatmap_legend(m)   # <— ADD LEGEND WHEN VISIBLE
+# ----------------------------------
+# Death markers
+# ----------------------------------
+death_layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=deaths,
+    get_position='[lon, lat]',
+    get_radius='deaths * 4',
+    get_fill_color='[255, 0, 0, 180]',
+    pickable=True,
+    auto_highlight=True
+)
+layers.append(death_layer)
 
-# ============================================================
-# DEATH MARKERS
-# ============================================================
-fg_deaths = folium.FeatureGroup("Deaths")
+# ----------------------------------
+# Pump markers
+# ----------------------------------
+pump_layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=pumps,
+    get_position='[lon, lat]',
+    get_radius=25,
+    get_fill_color='[0, 0, 255, 180]',
+    pickable=True
+)
+layers.append(pump_layer)
 
-for _, row in deaths.iterrows():
-    lat = row.geometry.y
-    lon = row.geometry.x
-    d = row[death_col]
+# ----------------------------------
+# KDE Surface (optional)
+# ----------------------------------
+if kde_toggle and len(kde_df) > 0:
+    kde_layer = pdk.Layer(
+        "ColumnLayer",
+        data=kde_df,
+        get_position='[lon, lat]',
+        get_elevation='density * 200',   # height of columns
+        elevation_scale=50,
+        radius=3,
+        get_fill_color='[255 * density, 150 * density, 0, 180]',
+        pickable=False,
+        auto_highlight=False
+    )
+    layers.append(kde_layer)
 
-    death_id  = row.get("ID", "N/A")
-    nearest_p = row.get("nearest_pump_id", "N/A")
-    dist_m    = row.get("distance_to_pump_m", 0)
+# =======================================================
+# RENDER MAP
+# =======================================================
 
-    popup_html = f"""
-    <b>Death Record</b><br>
-    ID: {death_id}<br>
-    Deaths: {d}<br>
-    Nearest Pump: {nearest_p}<br>
-    Distance: {dist_m:.1f} m<br>
-    """
+r = pdk.Deck(
+    layers=layers,
+    initial_view_state=VIEW,
+    map_style="mapbox://styles/mapbox/light-v10",
+    tooltip={"text": "Lat: {lat}\nLon: {lon}"}
+)
 
-    folium.CircleMarker(
-        [lat, lon],
-        radius=4 + d * 0.3,
-        color="red",
-        fill=True,
-        fill_opacity=0.85,
-        popup=popup_html
-    ).add_to(fg_deaths)
+st.pydeck_chart(r)
 
-fg_deaths.add_to(m)
+# =======================================================
+# LEGEND (only when KDE is ON)
+# =======================================================
+if kde_toggle:
+    st.markdown("""
+    ### KDE Legend
+    - **Red/Orange** = High disease intensity  
+    - **Yellow** = Medium risk  
+    - **Light Yellow** = Low risk  
+    """)
 
-# ============================================================
-# PUMP MARKERS
-# ============================================================
-fg_pumps = folium.FeatureGroup("Pumps")
+# =======================================================
+# DATA TABLES
+# =======================================================
+st.subheader("Death Records")
+st.dataframe(deaths)
 
-for _, row in pumps.iterrows():
-    lat = row.geometry.y
-    lon = row.geometry.x
-
-    pump_id = row.get("ID", "N/A")
-    pump_name = row.get("name", row.get("Name", "Unknown"))
-
-    popup_html = f"""
-    <b>Water Pump</b><br>
-    ID: {pump_id}<br>
-    Name: {pump_name}<br>
-    """
-
-    folium.Marker(
-        [lat, lon],
-        icon=folium.Icon(color="blue", icon="tint"),
-        popup=popup_html
-    ).add_to(fg_pumps)
-
-fg_pumps.add_to(m)
-
-folium.LayerControl().add_to(m)
-
-# Show map
-st_folium(m, width=1000, height=600)
-
-# ============================================================
-# TABLES
-# ============================================================
-st.markdown("---")
-st.subheader("Deaths Table (Nearest Pump + Distance)")
-st.dataframe(deaths.drop(columns="geometry"))
-
-st.subheader("Pumps Table")
-st.dataframe(pumps.drop(columns="geometry"))
+st.subheader("Pumps")
+st.dataframe(pumps)
