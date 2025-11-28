@@ -258,27 +258,31 @@ with tab2:
     folium.LayerControl().add_to(m2)
     st_folium(m2, width=1000, height=600)
 
-
 # ============================================================
-# TAB 3 — 3D EXTRUDED DEATHS + PUMP MARKERS
+# TAB 3 — 3D EXTRUDED DEATHS + PUMP MARKERS + PUMP TOOLTIP
 # ============================================================
 with tab3:
     st.subheader("3D Extruded Visualization of Cholera Deaths")
     st.markdown("""
-    This visualization shows **3D vertical bars** representing the number of cholera deaths at each building.  
-    Blue dots represent **water pumps**.
+    This visualization shows **3D vertical bars** representing the number  
+    of cholera deaths at each building.  
+    Blue dots represent **water pumps**, now with name + ID.
     """)
 
     # Prepare death data for 3D
     deaths_3d = deaths.copy()
     deaths_3d["lat"] = deaths_3d.geometry.y
     deaths_3d["lon"] = deaths_3d.geometry.x
-    deaths_3d["height"] = deaths_3d[death_col] * 8  # scaling factor
+    deaths_3d["height"] = deaths_3d[death_col] * 8
 
     # Prepare pump data for 3D
     pumps_3d = pumps.copy()
     pumps_3d["lat"] = pumps_3d.geometry.y
     pumps_3d["lon"] = pumps_3d.geometry.x
+    pumps_3d["pump_name"] = pumps_3d.apply(
+        lambda r: r.get("name", r.get("Name", f"Pump {r.get('ID', 'N/A')}")), axis=1
+    )
+    pumps_3d["pump_id"] = pumps_3d.get("ID", None)
 
     # 3D Death Columns
     column_layer = pdk.Layer(
@@ -287,30 +291,38 @@ with tab3:
         get_position=["lon", "lat"],
         get_elevation="height",
         elevation_scale=5,
-        radius=4,
+        radius=3,                    # <–– Smaller bars radius
         get_fill_color=[255, 0, 0],
         pickable=True,
         auto_highlight=True,
     )
 
-    # Pump markers
+    # Pump markers (smaller, prettier)
     pump_layer = pdk.Layer(
         "ScatterplotLayer",
         data=pumps_3d,
         get_position=["lon", "lat"],
-        get_color=[0, 100, 255],  # blue
-        get_radius=30,
+        get_color=[0, 120, 255],     # softer blue
+        get_radius=12,               # <–– much smaller now
         pickable=True,
     )
 
-    # Tooltip
+    # Tooltip (now covers BOTH death bars & pump markers)
     tooltip = {
-        "html": "<b>Deaths:</b> {"+death_col+"}<br>"
-                "<b>Nearest Pump:</b> {nearest_pump_id}<br>"
-                "<b>Distance:</b> {distance_to_pump_m} m"
+        "html": """
+        {% if deaths is defined %}
+            <b>Deaths:</b> {{deaths}}<br>
+            <b>Nearest Pump:</b> {{nearest_pump_id}}<br>
+            <b>Distance:</b> {{distance_to_pump_m}} m
+        {% else %}
+            <b>Water Pump</b><br>
+            <b>Name:</b> {{pump_name}}<br>
+            <b>ID:</b> {{pump_id}}
+        {% endif %}
+        """,
+        "style": {"backgroundColor": "black", "color": "white"},
     }
 
-    # Camera view
     view_state = pdk.ViewState(
         latitude=center_lat,
         longitude=center_lon,
@@ -327,6 +339,3 @@ with tab3:
     )
 
     st.pydeck_chart(deck)
-
-
-
