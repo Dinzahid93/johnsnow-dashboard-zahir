@@ -9,6 +9,7 @@ from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 import pydeck as pdk
 
+
 # ============================================================
 # HEATMAP LEGEND
 # ============================================================
@@ -121,16 +122,15 @@ deaths = add_nearest_pump_analysis(deaths, pumps)
 
 
 # ============================================================
-# STREAMLIT PAGE CONFIG
+# STREAMLIT CONFIG
 # ============================================================
 st.set_page_config(page_title="John Snow’s 1854 Cholera Map", layout="wide")
-
-
-# ============================================================
-# TITLE + IMAGE + HISTORICAL OVERVIEW
-# ============================================================
 st.title("John Snow’s 1854 Cholera Map")
 
+
+# ============================================================
+# TITLE + IMAGE
+# ============================================================
 col1, col2 = st.columns([2, 1])
 
 with col1:
@@ -149,7 +149,7 @@ with col1:
     """)
 
 with col2:
-    st.image("data/John_Snow.jpg", width=260, caption="Dr. John Snow (1813–1858)")
+    st.image("data/John_Snow.jpg", width=300, caption="Dr. John Snow (1813–1858)")
 
 st.markdown("---")
 
@@ -157,7 +157,11 @@ st.markdown("---")
 # ============================================================
 # TABS
 # ============================================================
-tab1, tab2, tab3 = st.tabs(["🔥 Heatmap of Deaths", "🕸 Spider Web Analysis", "📊 3D Bar Stacking"])
+tab1, tab2, tab3 = st.tabs([
+    "🔥 Heatmap of Deaths",
+    "🕸 Spider Web Analysis",
+    "🏢 3D Extruded Deaths"
+])
 
 
 # ============================================================
@@ -165,40 +169,38 @@ tab1, tab2, tab3 = st.tabs(["🔥 Heatmap of Deaths", "🕸 Spider Web Analysis"
 # ============================================================
 with tab1:
     st.subheader("Heatmap of Cholera Deaths")
-    st.markdown("""
-    Red areas show intense clustering of deaths during the outbreak.
-    """)
+    st.markdown("Red areas show outbreak hotspots.")
 
     center_lat = deaths.geometry.y.mean()
     center_lon = deaths.geometry.x.mean()
 
     m1 = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
 
-    fg_heat = folium.FeatureGroup("Heatmap")
-    fg_deaths = folium.FeatureGroup("Deaths")
-    fg_pumps = folium.FeatureGroup("Pumps")
+    fg_heatmap = folium.FeatureGroup("Heatmap")
+    fg_deaths = folium.FeatureGroup("Death Locations")
+    fg_pumps = folium.FeatureGroup("Water Pumps")
 
     heat_data = [[row.geometry.y, row.geometry.x, row[death_col]] for _, row in deaths.iterrows()]
-    HeatMap(heat_data, radius=25, blur=15).add_to(fg_heat)
+    HeatMap(heat_data, radius=25, blur=15).add_to(fg_heatmap)
 
     for _, row in deaths.iterrows():
         popup = f"""
-        <b>Deaths:</b> {row[death_col]}<br>
-        <b>Nearest Pump:</b> {row['nearest_pump_id']}<br>
-        <b>Distance:</b> {row['distance_to_pump_m']:.1f} m
+        <b>Deaths at location:</b> {row[death_col]}<br>
+        Nearest Pump: {row['nearest_pump_id']}<br>
+        Distance: {row['distance_to_pump_m']:.1f} m
         """
         folium.CircleMarker([row.geometry.y, row.geometry.x],
                             radius=4 + row[death_col] * 0.3,
                             color="red", fill=True, popup=popup).add_to(fg_deaths)
 
     for _, row in pumps.iterrows():
-        pname = row.get("name", row.get("Name", f"Pump {row.get('ID', 'N/A')}"))
-        popup = f"<b>{pname}</b><br>ID: {row.get('ID', 'N/A')}"
+        name = row.get("name", row.get("Name", f"Pump {row.get('ID', 'N/A')}"))
+        popup = f"<b>{name}</b><br>ID: {row.get('ID', 'N/A')}"
         folium.Marker([row.geometry.y, row.geometry.x],
                       icon=folium.Icon(color='blue', icon='tint'),
                       popup=popup).add_to(fg_pumps)
 
-    fg_heat.add_to(m1)
+    fg_heatmap.add_to(m1)
     fg_deaths.add_to(m1)
     fg_pumps.add_to(m1)
 
@@ -212,89 +214,76 @@ with tab1:
 # TAB 2 — SPIDER WEB
 # ============================================================
 with tab2:
-    st.subheader("Spider Web Analysis")
-    st.markdown("""
-    Each line links a death location to its nearest pump.
-    """)
+    st.subheader("Spider Web Analysis (Death → Nearest Pump)")
+    st.markdown("Shows nearest-pump connections for each death point.")
 
     m2 = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
 
     fg_spider = folium.FeatureGroup("Spider Lines")
-    fg_d = folium.FeatureGroup("Deaths")
-    fg_p = folium.FeatureGroup("Pumps")
+    fg_deaths = folium.FeatureGroup("Death Locations")
+    fg_pumps = folium.FeatureGroup("Water Pumps")
 
-    pump_lookup = {str(row.get("ID", "")): (row.geometry.y, row.geometry.x) for _, row in pumps.iterrows()}
+    pump_lookup = {str(row.get("ID", "")): (row.geometry.y, row.geometry.x)
+                    for _, row in pumps.iterrows()}
 
     for _, row in pumps.iterrows():
-        pname = row.get("name", row.get("Name", f"Pump {row.get('ID', 'N/A')}"))
-        popup = f"<b>{pname}</b>"
+        name = row.get("name", row.get("Name", f"Pump {row.get('ID', 'N/A')}"))
+        popup = f"<b>{name}</b><br>ID: {row.get('ID', 'N/A')}"
         folium.Marker([row.geometry.y, row.geometry.x],
-                      icon=folium.Icon(color="blue", icon="tint"),
-                      popup=popup).add_to(fg_p)
+                      icon=folium.Icon(color='blue', icon='tint'),
+                      popup=popup).add_to(fg_pumps)
 
     for _, row in deaths.iterrows():
-        dlat = row.geometry.y
-        dlon = row.geometry.x
-        pid = str(row["nearest_pump_id"])
+        d_lat = row.geometry.y
+        d_lon = row.geometry.x
+        nearest_id = str(row["nearest_pump_id"])
 
         popup = f"""
-        <b>Deaths:</b> {row[death_col]}<br>
-        <b>Nearest Pump:</b> {pid}<br>
-        <b>Distance:</b> {row['distance_to_pump_m']:.1f} m
+        <b>Deaths at location:</b> {row[death_col]}<br>
+        Nearest Pump: {nearest_id}<br>
+        Distance: {row['distance_to_pump_m']:.1f} m
         """
+        folium.CircleMarker([d_lat, d_lon], radius=4, color="red", fill=True,
+                            popup=popup).add_to(fg_deaths)
 
-        folium.CircleMarker([dlat, dlon], radius=4, color="red", fill=True, popup=popup).add_to(fg_d)
+        if nearest_id in pump_lookup:
+            p_lat, p_lon = pump_lookup[nearest_id]
+            folium.PolyLine([(d_lat, d_lon), (p_lat, p_lon)],
+                            color="black", weight=1.5).add_to(fg_spider)
 
-        if pid in pump_lookup:
-            plat, plon = pump_lookup[pid]
-            folium.PolyLine([(dlat, dlon), (plat, plon)], color="black", weight=1.2).add_to(fg_spider)
-
+    fg_deaths.add_to(m2)
     fg_spider.add_to(m2)
-    fg_d.add_to(m2)
-    fg_p.add_to(m2)
+    fg_pumps.add_to(m2)
 
     folium.LayerControl().add_to(m2)
-
     st_folium(m2, width=1000, height=600)
 
 
 # ============================================================
-# TAB 3 — PYDECK 3D BARS (with OpenStreetMap)
+# TAB 3 — 3D EXTRUDED DEATHS
 # ============================================================
 with tab3:
-    st.subheader("3D Bar Stacking of Cholera Deaths")
+    st.subheader("3D Extruded Visualization of Cholera Deaths")
     st.markdown("""
-    This 3D visualization displays vertical bars where height reflects the number of deaths.  
-    Pumps are marked in blue.
+    This visualization shows **3D vertical bars** representing the number  
+    of cholera deaths at each building.
     """)
 
-    deaths3 = deaths.copy()
-    deaths3["lat"] = deaths3.geometry.y
-    deaths3["lon"] = deaths3.geometry.x
-    deaths3["height"] = deaths3[death_col] * 10
-
-    pumps3 = pumps.copy()
-    pumps3["lat"] = pumps3.geometry.y
-    pumps3["lon"] = pumps3.geometry.x
+    deaths_3d = deaths.copy()
+    deaths_3d["lat"] = deaths_3d.geometry.y
+    deaths_3d["lon"] = deaths_3d.geometry.x
+    deaths_3d["height"] = deaths_3d[death_col] * 8  # scaling factor
 
     column_layer = pdk.Layer(
         "ColumnLayer",
-        data=deaths3,
+        data=deaths_3d,
         get_position=["lon", "lat"],
         get_elevation="height",
-        radius=6,
         elevation_scale=5,
+        radius=3,
         get_fill_color=[255, 0, 0],
         pickable=True,
-    )
-
-    pump_layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=pumps3,
-        get_position=["lon", "lat"],
-        get_color=[0, 100, 255],
-        get_radius=25,
-        pickable=True,
+        auto_highlight=True,
     )
 
     view_state = pdk.ViewState(
@@ -305,21 +294,17 @@ with tab3:
         bearing=20,
     )
 
-    TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-    tile_layer = pdk.Layer(
-        "TileLayer",
-        data=None,
-        minZoom=0,
-        maxZoom=19,
-        tile_size=256,
-        get_tile_url=TILE_URL,
-    )
+    tooltip = {
+        "html": "<b>Deaths:</b> {"+death_col+"}<br>"
+                "<b>Nearest Pump:</b> {nearest_pump_id}<br>"
+                "<b>Distance:</b> {distance_to_pump_m} m"
+    }
 
     deck = pdk.Deck(
-        layers=[tile_layer, column_layer, pump_layer],
+        layers=[column_layer],
         initial_view_state=view_state,
-        map_provider=None,
-        tooltip={"text": "Deaths: {deaths}\nNearest pump: {nearest_pump_id}"},
+        map_style="light",
+        tooltip=tooltip,
     )
 
     st.pydeck_chart(deck)
