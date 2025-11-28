@@ -272,63 +272,62 @@ with tab2:
     folium.LayerControl().add_to(m2)
 
     st_folium(m2, width=1000, height=600)
-
-
 # ============================================================
-# TAB 3 — 3D DEATH STACKING
+# TAB 3 — 3D EXTRUDED DEATHS (PyDeck)
 # ============================================================
+import pydeck as pdk
+
+tab3 = st.tabs(["🔥 Heatmap of Deaths", "🕸 Spider Web Analysis", "🏢 3D Extruded Deaths"])[2]
+
 with tab3:
-    st.subheader("3D Stacked Visualization of Cholera Deaths")
+    st.subheader("3D Extruded Visualization of Cholera Deaths")
     st.markdown("""
-    This 3D visualization shows how many cholera deaths occurred at each building.  
-    Each vertical bar represents one location, with the **height proportional to the number of deaths**.
+    This 3D visualization extrudes vertical bars at each death location.  
+    **The height of each bar is proportional to the number of deaths** recorded at that building.
     """)
 
-    import plotly.graph_objects as go
+    # Prepare PyDeck data
+    deaths_3d = deaths.copy()
+    deaths_3d["lat"] = deaths_3d.geometry.y
+    deaths_3d["lon"] = deaths_3d.geometry.x
+    deaths_3d["height"] = deaths_3d[death_col] * 10   # scale factor
 
-    df3d = pd.DataFrame({
-        "lat": deaths.geometry.y,
-        "lon": deaths.geometry.x,
-        "deaths": deaths[death_col],
-        "nearest_pump": deaths["nearest_pump_id"],
-        "dist": deaths["distance_to_pump_m"]
-    })
-
-    fig = go.Figure()
-
-    for _, row in df3d.iterrows():
-        fig.add_trace(go.Scatter3d(
-            x=[row["lon"]],
-            y=[row["lat"]],
-            z=[row["deaths"]],
-            mode="markers",
-            marker=dict(size=6, color="red"),
-            hovertemplate=f"""
-            <b>Deaths:</b> {row['deaths']}<br>
-            <b>Nearest Pump:</b> {row['nearest_pump']}<br>
-            <b>Distance:</b> {row['dist']:.1f} m<br>
-            """
-        ))
-
-        fig.add_trace(go.Scatter3d(
-            x=[row["lon"], row["lon"]],
-            y=[row["lat"], row["lat"]],
-            z=[0, row["deaths"]],
-            mode="lines",
-            line=dict(color="red", width=6),
-            showlegend=False
-        ))
-
-    fig.update_layout(
-        height=650,
-        scene=dict(
-            xaxis_title="Longitude",
-            yaxis_title="Latitude",
-            zaxis_title="Deaths Count",
-            aspectmode="data",
-            camera=dict(eye=dict(x=1.3, y=1.3, z=1)),
-        ),
-        margin=dict(r=10, l=10, b=10, t=10)
+    # Define 3D Column Layer
+    column_layer = pdk.Layer(
+        "ColumnLayer",
+        data=deaths_3d,
+        get_position=["lon", "lat"],
+        get_elevation="height",
+        elevation_scale=5,
+        radius=3,
+        get_fill_color=[255, 0, 0],  # red bars
+        pickable=True,
+        auto_highlight=True,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    # Camera view
+    view_state = pdk.ViewState(
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=16.5,
+        pitch=50,
+        bearing=20,
+    )
+
+    # Tooltip
+    tooltip = {
+        "html": "<b>Deaths:</b> {"+death_col+"}<br>"
+                "<b>Nearest Pump:</b> {nearest_pump_id}<br>"
+                "<b>Distance:</b> {distance_to_pump_m} m",
+        "style": {"backgroundColor": "steelblue", "color": "white"}
+    }
+
+    # Render
+    r = pdk.Deck(
+        layers=[column_layer],
+        initial_view_state=view_state,
+        map_style="light",
+        tooltip=tooltip
+    )
+
+    st.pydeck_chart(r)
