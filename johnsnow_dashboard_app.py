@@ -57,14 +57,13 @@ deaths_path = DATA_DIR / "deaths_by_bldg.geojson"
 pumps_path  = DATA_DIR / "pumps.geojson"
 
 # ============================================================
-# LOAD VECTOR DATA
+# LOAD DATA
 # ============================================================
 @st.cache_data
 def load_vectors():
     deaths = gpd.read_file(deaths_path)
     pumps  = gpd.read_file(pumps_path)
 
-    # Identify deaths field
     if "deaths" in deaths.columns:
         death_col = "deaths"
     elif "Count" in deaths.columns:
@@ -75,7 +74,6 @@ def load_vectors():
 
     deaths[death_col] = pd.to_numeric(deaths[death_col], errors="coerce").fillna(0).astype(int)
 
-    # CRS to WGS84
     if deaths.crs and deaths.crs.to_epsg() != 4326:
         deaths = deaths.to_crs(4326)
     if pumps.crs and pumps.crs.to_epsg() != 4326:
@@ -103,10 +101,9 @@ def add_nearest_pump_analysis(deaths, pumps):
     for _, row in deaths_proj.iterrows():
         point = row.geometry
         nearest_geom = nearest_points(point, pump_geoms.unary_union)[1]
-
         pump_row = pumps_proj[pumps_proj.geometry == nearest_geom]
-        pump_id = pump_row.iloc[0].get("ID", "N/A") if not pump_row.empty else "N/A"
 
+        pump_id = pump_row.iloc[0].get("ID", "N/A") if not pump_row.empty else "N/A"
         distance = point.distance(nearest_geom)
 
         nearest_ids.append(pump_id)
@@ -114,32 +111,54 @@ def add_nearest_pump_analysis(deaths, pumps):
 
     deaths["nearest_pump_id"] = nearest_ids
     deaths["distance_to_pump_m"] = nearest_dist
-
     return deaths
 
 deaths = add_nearest_pump_analysis(deaths, pumps)
 
 # ============================================================
-# STREAMLIT PAGE
+# STREAMLIT PAGE CONFIG
 # ============================================================
-st.set_page_config(page_title="John Snow Dashboard", layout="wide")
-st.title("John Snow Cholera Map - Dashboard")
+st.set_page_config(page_title="John Snow’s 1854 Cholera Map", layout="wide")
 
 # ============================================================
-# SIDEBAR
+# PAGE TITLE + HISTORICAL OVERVIEW
+# ============================================================
+st.title("John Snow’s 1854 Cholera Map")
+
+st.markdown("""
+### 🏛️ Historical Overview  
+In 1854, a severe cholera outbreak struck the Soho district of London.  
+Physician **Dr. John Snow** conducted a groundbreaking spatial investigation by  
+mapping cholera deaths and identifying proximity to water pumps.  
+
+His work demonstrated that the outbreak was linked to a contaminated pump on Broad Street —  
+marking one of the earliest and most influential cases of **epidemiology and spatial analysis**.  
+This dashboard recreates the iconic map using modern GIS technology.
+""")
+
+st.markdown("---")
+
+# ============================================================
+# SIDEBAR OPTIONS
 # ============================================================
 st.sidebar.header("Map Layers")
-show_heatmap = st.sidebar.checkbox("Show Heatmap of Deaths", value=True)
-show_spider = st.sidebar.checkbox("Show Spider Lines (Death → Nearest Pump)", value=False)
+show_heatmap = st.sidebar.checkbox("Show Heatmap", value=True)
+show_spider = st.sidebar.checkbox("Show Spider Lines (Death → Pump)", value=False)
 
 # ============================================================
-# SUMMARY METRICS
+# SUMMARY STATISTICS – NOW IN TEXT + BAR CHART
 # ============================================================
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Deaths", int(deaths[death_col].sum()))
-c2.metric("Buildings", len(deaths))
-c3.metric("Max Deaths", int(deaths[death_col].max()))
-c4.metric("Avg Distance to Pump (m)", f"{deaths['distance_to_pump_m'].mean():.1f}")
+total_deaths = int(deaths[death_col].sum())
+max_deaths = int(deaths[death_col].max())
+avg_distance = deaths["distance_to_pump_m"].mean()
+
+st.subheader("Summary Statistics")
+st.write(f"**Total Recorded Deaths:** {total_deaths}")
+st.write(f"**Maximum Death in a Building:** {max_deaths}")
+st.write(f"**Average Distance to Nearest Pump:** {avg_distance:.1f} meters")
+
+# Bar chart of deaths by building
+st.bar_chart(deaths[death_col])
 
 st.markdown("---")
 
@@ -154,12 +173,10 @@ center_lon = deaths.geometry.x.mean()
 m = folium.Map(
     location=[center_lat, center_lon],
     zoom_start=17,
-    tiles="CartoDB Positron"
+    tiles="OpenStreetMap"       # <= CHANGED HERE
 )
 
-# ============================================================
-# HEATMAP
-# ============================================================
+# ----------------- HEATMAP -----------------
 if show_heatmap:
     heat_data = [
         [row.geometry.y, row.geometry.x, row[death_col]]
@@ -173,29 +190,20 @@ if show_heatmap:
         blur=15,
         max_zoom=17,
     ).add_to(m)
-
     add_heatmap_legend(m)
 
-# ============================================================
-# DEATH MARKERS
-# ============================================================
+# ----------------- DEATH MARKERS -----------------
 fg_deaths = folium.FeatureGroup("Deaths")
-
 for _, row in deaths.iterrows():
     lat = row.geometry.y
     lon = row.geometry.x
     d = row[death_col]
 
-    death_id  = row.get("ID", "N/A")
-    nearest_p = row.get("nearest_pump_id", "N/A")
-    dist_m    = row.get("distance_to_pump_m", 0)
-
     popup_html = f"""
     <b>Death Record</b><br>
-    ID: {death_id}<br>
     Deaths: {d}<br>
-    Nearest Pump: {nearest_p}<br>
-    Distance: {dist_m:.1f} m<br>
+    Nearest Pump: {row['nearest_pump_id']}<br>
+    Distance: {row['distance_to_pump_m']:.1f} m<br>
     """
 
     folium.CircleMarker(
@@ -206,53 +214,41 @@ for _, row in deaths.iterrows():
         fill_opacity=0.85,
         popup=popup_html
     ).add_to(fg_deaths)
-
 fg_deaths.add_to(m)
 
-# ============================================================
-# PUMP MARKERS
-# ============================================================
+# ----------------- PUMP MARKERS -----------------
 fg_pumps = folium.FeatureGroup("Pumps")
-
 for _, row in pumps.iterrows():
     lat = row.geometry.y
     lon = row.geometry.x
 
-    pump_id = row.get("ID", "N/A")
-    pump_name = row.get("name", row.get("Name", "Unknown"))
-
     popup_html = f"""
     <b>Water Pump</b><br>
-    ID: {pump_id}<br>
-    Name: {pump_name}<br>
+    ID: {row.get("ID", "N/A")}<br>
     """
-
     folium.Marker(
         [lat, lon],
         icon=folium.Icon(color="blue", icon="tint"),
         popup=popup_html
     ).add_to(fg_pumps)
-
 fg_pumps.add_to(m)
 
-# ============================================================
-# SPIDER LINES (Death → Nearest Pump)
-# ============================================================
+# ----------------- SPIDER LINES -----------------
 if show_spider:
     fg_spider = folium.FeatureGroup("Spider Lines")
 
     pump_lookup = {
-        str(row.get("ID", row.get("id", ""))): (row.geometry.y, row.geometry.x)
+        str(row.get("ID", "")): (row.geometry.y, row.geometry.x)
         for _, row in pumps.iterrows()
     }
 
     for _, row in deaths.iterrows():
-        death_lat = row.geometry.y
-        death_lon = row.geometry.x
         nearest_id = str(row.get("nearest_pump_id", ""))
 
         if nearest_id in pump_lookup:
             pump_lat, pump_lon = pump_lookup[nearest_id]
+            death_lat = row.geometry.y
+            death_lon = row.geometry.x
 
             folium.PolyLine(
                 locations=[(death_lat, death_lon), (pump_lat, pump_lon)],
@@ -263,10 +259,10 @@ if show_spider:
 
     fg_spider.add_to(m)
 
-# ============================================================
-# LAYER CONTROL + RENDER MAP
-# ============================================================
+# Layer Control
 folium.LayerControl().add_to(m)
+
+# Render map
 st_folium(m, width=1000, height=600)
 
 # ============================================================
@@ -276,5 +272,5 @@ st.markdown("---")
 st.subheader("Deaths Table (Nearest Pump + Distance)")
 st.dataframe(deaths.drop(columns="geometry"))
 
-st.subheader("Pumps Table")
+st.subheader("Pump Locations Table")
 st.dataframe(pumps.drop(columns="geometry"))
