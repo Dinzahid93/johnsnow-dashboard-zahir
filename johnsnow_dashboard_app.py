@@ -9,6 +9,17 @@ from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 
 # ============================================================
+# DEBUG — SHOW DIRECTORY AND CONTENTS
+# ============================================================
+st.write("🟪 DEBUG — CURRENT WORKING DIRECTORY:", os.getcwd())
+
+try:
+    st.write("🟪 DEBUG — CONTENTS OF data/:", os.listdir("data"))
+except Exception as e:
+    st.write("🟥 DEBUG — ERROR LISTING data/:", e)
+
+
+# ============================================================
 # HEATMAP LEGEND
 # ============================================================
 def add_heatmap_legend(m):
@@ -148,8 +159,12 @@ with col1:
     """)
 
 with col2:
+    # DEBUG — Test if file exists
+    st.write("🟪 DEBUG — Does John_Snow.jpg exist?", os.path.exists("data/John_Snow.jpg"))
+
+    # Display image (may fail if file not present)
     st.image(
-        "data/John_Snow.jpg",   # <- Your image must be placed here
+        "data/John_Snow.jpg",
         caption="Dr. John Snow (1813–1858)",
         use_column_width=True
     )
