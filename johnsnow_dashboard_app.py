@@ -169,11 +169,7 @@ tab1, tab2, tab3 = st.tabs([
 # ============================================================
 with tab1:
     st.subheader("Heatmap of Cholera Deaths")
-    st.markdown("""
-    This heatmap visualizes the **intensity of cholera fatalities** across the Soho district.  
-    Warmer colors (yellow–red) highlight concentrated clusters of deaths,  
-    revealing key outbreak hotspots that shaped John Snow’s landmark findings.
-    """)
+    st.markdown("Red areas show outbreak hotspots.")
 
     center_lat = deaths.geometry.y.mean()
     center_lon = deaths.geometry.x.mean()
@@ -190,8 +186,8 @@ with tab1:
     for _, row in deaths.iterrows():
         popup = f"""
         <b>Deaths at location:</b> {row[death_col]}<br>
-        <b>Nearest Pump:</b> {row['nearest_pump_id']}<br>
-        <b>Distance:</b> {row['distance_to_pump_m']:.1f} m
+        Nearest Pump: {row['nearest_pump_id']}<br>
+        Distance: {row['distance_to_pump_m']:.1f} m
         """
         folium.CircleMarker([row.geometry.y, row.geometry.x],
                             radius=4 + row[death_col] * 0.3,
@@ -219,11 +215,7 @@ with tab1:
 # ============================================================
 with tab2:
     st.subheader("Spider Web Analysis (Death → Nearest Pump)")
-    st.markdown("""
-    This analysis illustrates the **closest water pump for every recorded cholera death**.  
-    The connecting lines form a “spider web” pattern, revealing how  
-    contaminated water sources shaped the outbreak’s progression.
-    """)
+    st.markdown("Shows nearest-pump connections for each death point.")
 
     m2 = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
 
@@ -248,8 +240,8 @@ with tab2:
 
         popup = f"""
         <b>Deaths at location:</b> {row[death_col]}<br>
-        <b>Nearest Pump:</b> {nearest_id}<br>
-        <b>Distance:</b> {row['distance_to_pump_m']:.1f} m
+        Nearest Pump: {nearest_id}<br>
+        Distance: {row['distance_to_pump_m']:.1f} m
         """
         folium.CircleMarker([d_lat, d_lon], radius=4, color="red", fill=True,
                             popup=popup).add_to(fg_deaths)
@@ -268,33 +260,20 @@ with tab2:
 
 
 # ============================================================
-# TAB 3 — 3D EXTRUDED DEATHS + PUMP MARKERS
+# TAB 3 — 3D EXTRUDED DEATHS
 # ============================================================
 with tab3:
     st.subheader("3D Extruded Visualization of Cholera Deaths")
     st.markdown("""
-    This 3D visualization displays **vertically extruded bars** whose heights  
-    correspond to the number of cholera deaths at each building.  
-    Blue markers represent **water pumps**, enabling quick comparison between  
-    pump locations and mortality intensity.
+    This visualization shows **3D vertical bars** representing the number  
+    of cholera deaths at each building.
     """)
 
-    # Prepare death data
     deaths_3d = deaths.copy()
     deaths_3d["lat"] = deaths_3d.geometry.y
     deaths_3d["lon"] = deaths_3d.geometry.x
-    deaths_3d["height"] = deaths_3d[death_col] * 8
+    deaths_3d["height"] = deaths_3d[death_col] * 8  # scaling factor
 
-    # Prepare pump data
-    pumps_3d = pumps.copy()
-    pumps_3d["lat"] = pumps_3d.geometry.y
-    pumps_3d["lon"] = pumps_3d.geometry.x
-    pumps_3d["pump_name"] = pumps_3d.apply(
-        lambda r: r.get("name", r.get("Name", f"Pump {r.get('ID', 'N/A')}")), axis=1
-    )
-    pumps_3d["pump_id"] = pumps_3d.get("ID", None)
-
-    # Death bars layer
     column_layer = pdk.Layer(
         "ColumnLayer",
         data=deaths_3d,
@@ -307,33 +286,6 @@ with tab3:
         auto_highlight=True,
     )
 
-    # Pump scatter layer
-    pump_layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=pumps_3d,
-        get_position=["lon", "lat"],
-        get_color=[0, 120, 255],
-        get_radius=12,
-        pickable=True,
-    )
-
-    # Tooltip logic
-    tooltip = {
-        "html": """
-        {% if deaths is defined %}
-            <b>Deaths:</b> {{deaths}}<br>
-            <b>Nearest Pump:</b> {{nearest_pump_id}}<br>
-            <b>Distance:</b> {{distance_to_pump_m}} m
-        {% else %}
-            <b>Water Pump</b><br>
-            <b>Name:</b> {{pump_name}}<br>
-            <b>ID:</b> {{pump_id}}
-        {% endif %}
-        """,
-        "style": {"backgroundColor": "black", "color": "white"},
-    }
-
-    # Camera view
     view_state = pdk.ViewState(
         latitude=center_lat,
         longitude=center_lon,
@@ -342,8 +294,14 @@ with tab3:
         bearing=20,
     )
 
+    tooltip = {
+        "html": "<b>Deaths:</b> {"+death_col+"}<br>"
+                "<b>Nearest Pump:</b> {nearest_pump_id}<br>"
+                "<b>Distance:</b> {distance_to_pump_m} m"
+    }
+
     deck = pdk.Deck(
-        layers=[column_layer, pump_layer],
+        layers=[column_layer],
         initial_view_state=view_state,
         map_style="light",
         tooltip=tooltip,
