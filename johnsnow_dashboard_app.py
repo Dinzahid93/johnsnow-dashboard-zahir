@@ -296,8 +296,7 @@ with tab3:
 
     tooltip = {
         "html": "<b>Deaths:</b> {"+death_col+"}<br>"
-                "<b>Nearest Pump:</b> {nearest_pump_id}<br>"
-                "<b>Distance:</b> {distance_to_pump_m} m"
+              
     }
 
     deck = pdk.Deck(
@@ -308,3 +307,4 @@ with tab3:
     )
 
     st.pydeck_chart(deck)
+
