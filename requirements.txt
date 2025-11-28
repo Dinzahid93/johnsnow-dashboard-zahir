@@ -4,3 +4,5 @@ streamlit
 streamlit-folium
 numpy
 rasterio
+plotly
+
