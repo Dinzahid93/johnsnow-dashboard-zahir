@@ -169,7 +169,7 @@ tab1, tab2, tab3 = st.tabs([
 # ============================================================
 with tab1:
     st.subheader("Heatmap of Cholera Deaths")
-    st.markdown("Red areas show outbreak hotspots.")
+    st.markdown("This heatmap visualizes the intensity of cholera fatalities across the Soho district. Areas shaded in yellow–red indicate higher concentrations of deaths, highlighting the core outbreak zones identified during John Snow’s investigation. The spatial clustering seen here reflects how the disease spread rapidly around contaminated water sources, revealing patterns that were critical in disproving the miasma theory and advancing modern epidemiology.")
 
     center_lat = deaths.geometry.y.mean()
     center_lon = deaths.geometry.x.mean()
@@ -215,7 +215,7 @@ with tab1:
 # ============================================================
 with tab2:
     st.subheader("Spider Web Analysis (Death → Nearest Pump)")
-    st.markdown("Shows nearest-pump connections for each death point.")
+    st.markdown("This visualization illustrates the nearest water pump associated with each recorded death location. Each connecting line represents the most spatially proximate pump to a cholera fatality, forming a “spider web” pattern. These linkages help reveal which pumps were likely contributing to the contamination pathway, offering insight into how residents interacted with their environment and how the outbreak propagated through daily water-drawing habits.")
 
     m2 = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
 
@@ -265,8 +265,7 @@ with tab2:
 with tab3:
     st.subheader("3D Extruded Visualization of Cholera Deaths")
     st.markdown("""
-    This visualization shows **3D vertical bars** representing the number  
-    of cholera deaths at each building.
+    This 3D view presents vertically extruded bars, where each bar’s height corresponds to the number of cholera deaths recorded at that exact location. By adding a third dimension, the visualization makes it easier to identify buildings with unusually high mortality, spot spatial clusters, and compare severity across the neighborhood. This perspective highlights the disproportionate impact around specific pumps and reinforces the spatial patterns that were essential to John Snow’s breakthrough analysis..
     """)
 
     deaths_3d = deaths.copy()
@@ -308,3 +307,4 @@ with tab3:
     )
 
     st.pydeck_chart(deck)
+
