@@ -9,17 +9,6 @@ from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 
 # ============================================================
-# DEBUG — SHOW DIRECTORY AND CONTENTS
-# ============================================================
-st.write("🟪 DEBUG — CURRENT WORKING DIRECTORY:", os.getcwd())
-
-try:
-    st.write("🟪 DEBUG — CONTENTS OF data/:", os.listdir("data"))
-except Exception as e:
-    st.write("🟥 DEBUG — ERROR LISTING data/:", e)
-
-
-# ============================================================
 # HEATMAP LEGEND
 # ============================================================
 def add_heatmap_legend(m):
@@ -56,7 +45,7 @@ def add_heatmap_legend(m):
 
 
 # ============================================================
-# PATHS
+# PATH SETUP
 # ============================================================
 try:
     BASE_DIR = pathlib.Path(__file__).parent
@@ -159,162 +148,80 @@ with col1:
     """)
 
 with col2:
-    # DEBUG — Test if file exists
-    st.write("🟪 DEBUG — Does John_Snow.jpg exist?", os.path.exists("data/John_Snow.jpg"))
-
-    # Display image (may fail if file not present)
-    st.image(
-        "data/John_Snow.jpg",
-        caption="Dr. John Snow (1813–1858)",
-        use_column_width=True
-    )
+    st.image("data/John_Snow.jpg", caption="Dr. John Snow (1813–1858)", use_column_width=True)
 
 st.markdown("---")
 
 
 # ============================================================
-# SIDEBAR LAYERS
+# TABS: HEATMAP + SPIDER WEB
 # ============================================================
-st.sidebar.header("Map Layers")
-show_heatmap = st.sidebar.checkbox("Show Heatmap", value=True)
-show_spider = st.sidebar.checkbox("Show Spider Lines (Death → Pump)", value=False)
+tab1, tab2 = st.tabs(["🔥 Heatmap of Deaths", "🕸 Spider Web Analysis"])
+
+# -----------------------------
+# TAB 1 — HEATMAP
+# -----------------------------
+with tab1:
+    st.subheader("Heatmap of Cholera Deaths")
+    st.markdown("""
+    The heatmap highlights areas with higher concentrations of cholera deaths.  
+    **Red zones indicate outbreak hotspots**, which help researchers understand  
+    how contaminated water sources contributed to transmission.
+    """)
+
+    center_lat = deaths.geometry.y.mean()
+    center_lon = deaths.geometry.x.mean()
+
+    m1 = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
+
+    heat_data = [[row.geometry.y, row.geometry.x, row[death_col]] for _, row in deaths.iterrows()]
+
+    HeatMap(heat_data, radius=25, blur=15, max_zoom=17).add_to(m1)
+    add_heatmap_legend(m1)
+
+    st_folium(m1, width=1000, height=600)
 
 
-# ============================================================
-# SUMMARY + BAR CHART
-# ============================================================
-total_deaths = int(deaths[death_col].sum())
-max_deaths = int(deaths[death_col].max())
-avg_distance = deaths["distance_to_pump_m"].mean()
+# -----------------------------
+# TAB 2 — SPIDER WEB ANALYSIS
+# -----------------------------
+with tab2:
+    st.subheader("Spider Web Analysis (Death → Nearest Pump)")
+    st.markdown("""
+    Each line connects a death location to its **nearest water pump**.  
+    This visualization helps identify which pumps likely influenced  
+    the spread of cholera during the 1854 outbreak.
+    """)
 
-st.subheader("Summary Statistics")
-st.write(f"**Total Recorded Deaths:** {total_deaths}")
-st.write(f"**Maximum Death in a Building:** {max_deaths}")
-st.write(f"**Average Distance to Nearest Pump:** {avg_distance:.1f} meters")
+    m2 = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
 
-st.bar_chart(deaths[death_col])
+    # Pumps
+    for _, row in pumps.iterrows():
+        folium.Marker(
+            [row.geometry.y, row.geometry.x],
+            icon=folium.Icon(color="blue", icon="tint"),
+            popup="Pump"
+        ).add_to(m2)
 
-st.markdown("---")
-
-
-# ============================================================
-# INTERACTIVE MAP
-# ============================================================
-st.subheader("Interactive Map")
-
-center_lat = deaths.geometry.y.mean()
-center_lon = deaths.geometry.x.mean()
-
-m = folium.Map(
-    location=[center_lat, center_lon],
-    zoom_start=17,
-    tiles="OpenStreetMap"
-)
-
-# --- Heatmap ---
-if show_heatmap:
-    heat_data = [
-        [row.geometry.y, row.geometry.x, row[death_col]]
-        for _, row in deaths.iterrows()
-    ]
-
-    HeatMap(
-        heat_data,
-        name="Heatmap",
-        radius=25,
-        blur=15,
-        max_zoom=17,
-    ).add_to(m)
-
-    add_heatmap_legend(m)
-
-
-# --- Death Markers ---
-fg_deaths = folium.FeatureGroup("Deaths")
-
-for _, row in deaths.iterrows():
-    lat = row.geometry.y
-    lon = row.geometry.x
-    d = row[death_col]
-
-    popup_html = f"""
-    <b>Death Record</b><br>
-    Deaths: {d}<br>
-    Nearest Pump: {row['nearest_pump_id']}<br>
-    Distance: {row['distance_to_pump_m']:.1f} m<br>
-    """
-
-    folium.CircleMarker(
-        [lat, lon],
-        radius=4 + d * 0.3,
-        color="red",
-        fill=True,
-        fill_opacity=0.85,
-        popup=popup_html
-    ).add_to(fg_deaths)
-
-fg_deaths.add_to(m)
-
-
-# --- Pump Markers ---
-fg_pumps = folium.FeatureGroup("Pumps")
-
-for _, row in pumps.iterrows():
-    lat = row.geometry.y
-    lon = row.geometry.x
-
-    popup_html = f"""
-    <b>Water Pump</b><br>
-    ID: {row.get("ID", "N/A")}<br>
-    """
-
-    folium.Marker(
-        [lat, lon],
-        icon=folium.Icon(color="blue", icon="tint"),
-        popup=popup_html
-    ).add_to(fg_pumps)
-
-fg_pumps.add_to(m)
-
-
-# --- Spider Lines ---
-if show_spider:
-    fg_spider = folium.FeatureGroup("Spider Lines")
-
-    pump_lookup = {
-        str(row.get("ID", "")): (row.geometry.y, row.geometry.x)
-        for _, row in pumps.iterrows()
-    }
+    # Deaths + spider lines
+    pump_lookup = {str(row.get("ID", "")): (row.geometry.y, row.geometry.x) for _, row in pumps.iterrows()}
 
     for _, row in deaths.iterrows():
+        d_lat = row.geometry.y
+        d_lon = row.geometry.x
         nearest_id = str(row.get("nearest_pump_id", ""))
 
-        if nearest_id in pump_lookup:
-            pump_lat, pump_lon = pump_lookup[nearest_id]
-            death_lat = row.geometry.y
-            death_lon = row.geometry.x
+        # draw line only if pump exists
+        for _, prow in pumps.iterrows():
+            if str(prow.get("ID", "")) == nearest_id:
+                p_lat = prow.geometry.y
+                p_lon = prow.geometry.x
 
-            folium.PolyLine(
-                locations=[(death_lat, death_lon), (pump_lat, pump_lon)],
-                color="black",
-                weight=1.5,
-                opacity=0.8
-            ).add_to(fg_spider)
+                folium.PolyLine([(d_lat, d_lon), (p_lat, p_lon)],
+                                color="black", weight=1.5, opacity=0.8).add_to(m2)
 
-    fg_spider.add_to(m)
+                break
 
+        folium.CircleMarker([d_lat, d_lon], radius=4, color="red", fill=True).add_to(m2)
 
-# Render
-folium.LayerControl().add_to(m)
-st_folium(m, width=1000, height=600)
-
-
-# ============================================================
-# TABLES
-# ============================================================
-st.markdown("---")
-st.subheader("Deaths Table (Nearest Pump + Distance)")
-st.dataframe(deaths.drop(columns="geometry"))
-
-st.subheader("Pump Locations Table")
-st.dataframe(pumps.drop(columns="geometry"))
+    st_folium(m2, width=1000, height=600)
