@@ -265,8 +265,7 @@ with tab2:
 with tab3:
     st.subheader("3D Extruded Visualization of Cholera Deaths")
     st.markdown("""
-    This visualization shows **3D vertical bars** representing the number  
-    of cholera deaths at each building.
+    This visualization shows **3D vertical bars** representing the number of cholera deaths at each building.
     """)
 
     deaths_3d = deaths.copy()
@@ -308,3 +307,4 @@ with tab3:
     )
 
     st.pydeck_chart(deck)
+
