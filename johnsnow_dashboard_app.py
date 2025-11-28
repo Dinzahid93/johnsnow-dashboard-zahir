@@ -149,7 +149,7 @@ with col1:
 
 with col2:
     st.image(
-        r"C:\DIN PERSONAL\4. uitm\Lab Dr Eran\Assignment\John_Snow.jpg",
+        "data/John_Snow.jpg",   # <- Your image must be placed here
         caption="Dr. John Snow (1813–1858)",
         use_column_width=True
     )
